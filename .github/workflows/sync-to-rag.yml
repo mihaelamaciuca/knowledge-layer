@@ -5,6 +5,7 @@ on:
     branches: [main]
     paths:
       - "docs/**"
+  workflow_dispatch:  # manual trigger for testing
 
 permissions:
   contents: read
