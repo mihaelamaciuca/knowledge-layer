@@ -9,30 +9,36 @@ Reads from the `decisions` table populated by
 generator hasn't run yet), the tools return graceful empty results.
 """
 import logging
-import os
-
-import psycopg2
 
 from rag_core.relationships import to_full
+from src.db import connection
 
 log = logging.getLogger(__name__)
-
-
-def _connect():
-    return psycopg2.connect(os.environ["DATABASE_URL"])
 
 
 def _row_to_dict(cols, row):
     return {c: v for c, v in zip(cols, row)}
 
 
+def _stringify_date(r: dict | None) -> None:
+    if r and r.get("decided_on"):
+        r["decided_on"] = r["decided_on"].isoformat()
+
+
+_COLS = [
+    "id", "decision_key", "area", "decision", "current_value",
+    "source_doc", "decided_on", "cross_refs", "superseded_by",
+]
+_SELECT = "SELECT " + ", ".join(_COLS) + " FROM decisions"
+
+
 def get_decision(query_or_id: str | int) -> dict:
     """Look up a single decision by id, key, or fuzzy text match.
 
     Resolution order:
-        1. If `query_or_id` is an int or a digit string → lookup by id
-        2. If it matches a `decision_key` slug → lookup by key
-        3. Otherwise → ILIKE match on the decision text and current_value;
+        1. If `query_or_id` is an int or a digit string, lookup by id
+        2. If it matches a `decision_key` slug, lookup by key
+        3. Otherwise, ILIKE match on the decision text and current_value;
            return the highest-confidence match plus its alternatives
 
     Returns:
@@ -40,44 +46,39 @@ def get_decision(query_or_id: str | int) -> dict:
             "decision": <row dict> or None,
             "alternatives": [<row dict>, ...],   # only when fuzzy match
             "supersedes_chain": [<row dict>, ...],
-            "banner": "[CURRENT]" | "[SUPERSEDED by <id> on <date>]" | "[DRAFT]",
+            "banner": "[CURRENT]" | "[SUPERSEDED by `<key>` on <date>]" | "[DRAFT]" | "[NOT FOUND]",
         }
-    """
-    cols = [
-        "id", "decision_key", "area", "decision", "current_value",
-        "source_doc", "decided_on", "cross_refs", "superseded_by",
-    ]
-    select = "SELECT " + ", ".join(cols) + " FROM decisions"
 
+    On error: `{"error": "<message>"}`.
+    """
     try:
-        conn = _connect()
-        try:
+        with connection() as conn:
             with conn.cursor() as cur:
-                row = None
+                row: dict | None = None
                 alternatives: list[dict] = []
 
-                # Try id
+                # 1. id lookup
                 if isinstance(query_or_id, int) or (isinstance(query_or_id, str) and query_or_id.isdigit()):
-                    cur.execute(select + " WHERE id = %s", (int(query_or_id),))
+                    cur.execute(_SELECT + " WHERE id = %s", (int(query_or_id),))
                     fetched = cur.fetchone()
                     if fetched:
-                        row = _row_to_dict(cols, fetched)
+                        row = _row_to_dict(_COLS, fetched)
 
-                # Try decision_key
+                # 2. decision_key lookup
                 if row is None and isinstance(query_or_id, str):
-                    cur.execute(select + " WHERE decision_key = %s", (query_or_id,))
+                    cur.execute(_SELECT + " WHERE decision_key = %s", (query_or_id,))
                     fetched = cur.fetchone()
                     if fetched:
-                        row = _row_to_dict(cols, fetched)
+                        row = _row_to_dict(_COLS, fetched)
 
-                # Try fuzzy match
+                # 3. fuzzy match
                 if row is None and isinstance(query_or_id, str):
                     cur.execute(
-                        select + " WHERE decision ILIKE %s OR current_value ILIKE %s "
+                        _SELECT + " WHERE decision ILIKE %s OR current_value ILIKE %s "
                         "ORDER BY length(decision) ASC LIMIT 5",
                         (f"%{query_or_id}%", f"%{query_or_id}%"),
                     )
-                    matches = [_row_to_dict(cols, r) for r in cur.fetchall()]
+                    matches = [_row_to_dict(_COLS, r) for r in cur.fetchall()]
                     if matches:
                         row = matches[0]
                         alternatives = matches[1:]
@@ -98,33 +99,32 @@ def get_decision(query_or_id: str | int) -> dict:
                     if cursor_row["superseded_by"] is None or cursor_row["id"] in seen:
                         break
                     seen.add(cursor_row["id"])
-                    cur.execute(select + " WHERE id = %s", (cursor_row["superseded_by"],))
+                    cur.execute(_SELECT + " WHERE id = %s", (cursor_row["superseded_by"],))
                     nxt = cur.fetchone()
                     if not nxt:
                         break
-                    cursor_row = _row_to_dict(cols, nxt)
+                    cursor_row = _row_to_dict(_COLS, nxt)
                     chain.append(cursor_row)
 
                 if row["superseded_by"]:
                     target = chain[-1] if chain else None
-                    banner = f"[SUPERSEDED by id={row['superseded_by']}]"
                     if target:
                         banner = (
                             f"[SUPERSEDED by `{target['decision_key']}` on "
                             f"{target['decided_on'] or 'unknown date'}]"
                         )
+                    else:
+                        banner = f"[SUPERSEDED by id={row['superseded_by']}]"
+                elif row.get("decided_on") is None:
+                    banner = "[DRAFT]"
                 else:
                     banner = "[CURRENT]"
-        finally:
-            conn.close()
     except Exception as exc:
         log.error("get_decision failed: %s", exc)
         return {"error": str(exc)}
 
-    # Stringify dates for JSON friendliness
     for r in [row, *alternatives, *chain]:
-        if r and r.get("decided_on"):
-            r["decided_on"] = r["decided_on"].isoformat()
+        _stringify_date(r)
 
     return {
         "decision": row,
@@ -134,12 +134,35 @@ def get_decision(query_or_id: str | int) -> dict:
     }
 
 
+def _looks_like_decision_key(value: str) -> bool:
+    """A decision_key is a lowercase slug without `.md` or path separators.
+
+    A doc filename always carries `.md` or a `nn-type-` prefix; a decision
+    key looks like `trial-length` or `advisory-lock-numbers`.
+    """
+    if not value:
+        return False
+    if value.endswith(".md"):
+        return False
+    if "/" in value:
+        return False
+    # Doc filenames start with two digits then a hyphen
+    if len(value) >= 3 and value[0:2].isdigit() and value[2] == "-":
+        return False
+    return True
+
+
 def get_impact_targets(doc_or_decision: str) -> dict:
     """Return every doc affected by a change to the given source.
 
     `doc_or_decision` may be:
         - A bare or full doc filename (delegates to get_doc_neighborhood)
         - A decision_key (resolves to its source_doc, then neighborhood)
+
+    The resolver tries decision_key first when the value looks like a
+    slug; if the lookup misses, it falls through to the doc-filename
+    path. This way a key that happens to be a slug doesn't get treated
+    as a missing doc.
 
     Returns:
         {
@@ -148,18 +171,19 @@ def get_impact_targets(doc_or_decision: str) -> dict:
             "decision": <row from decisions, or None>,
             "neighborhood": <full output of get_doc_neighborhood>,
         }
+
+    On error: `{"error": "<message>"}` (only from the decision lookup; the
+    neighborhood call has its own error surface).
     """
     from src.neighborhood import get_doc_neighborhood
 
-    # Try as decision key first
     decision_row: dict | None = None
     anchor_doc: str | None = None
     anchor_kind = "doc"
 
-    if isinstance(doc_or_decision, str) and "/" not in doc_or_decision and not doc_or_decision.endswith(".md"):
+    if isinstance(doc_or_decision, str) and _looks_like_decision_key(doc_or_decision):
         try:
-            conn = _connect()
-            try:
+            with connection() as conn:
                 with conn.cursor() as cur:
                     cur.execute(
                         "SELECT id, decision_key, area, decision, current_value, "
@@ -174,10 +198,7 @@ def get_impact_targets(doc_or_decision: str) -> dict:
                         decision_row = dict(zip(cols, fetched))
                         anchor_doc = decision_row["source_doc"]
                         anchor_kind = "decision"
-                        if decision_row.get("decided_on"):
-                            decision_row["decided_on"] = decision_row["decided_on"].isoformat()
-            finally:
-                conn.close()
+                        _stringify_date(decision_row)
         except Exception as exc:
             log.warning("decision lookup in get_impact_targets failed: %s", exc)
 

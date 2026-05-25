@@ -17,7 +17,7 @@ CREATE TABLE IF NOT EXISTS doc_chunks (
     id               uuid        DEFAULT gen_random_uuid() PRIMARY KEY,
     source_file      text        NOT NULL,
     section_header   text,
-    area_number      text,
+    area_number      int,
     doc_type         text,
     content          text        NOT NULL,
     content_hash     text        NOT NULL UNIQUE,
@@ -47,6 +47,28 @@ ALTER TABLE doc_chunks ADD COLUMN IF NOT EXISTS feeds_into text[];
 ALTER TABLE doc_chunks ADD COLUMN IF NOT EXISTS also_touches int[];
 ALTER TABLE doc_chunks ADD COLUMN IF NOT EXISTS tsv tsvector;
 
+-- Migrate area_number from text to int for forks that ran an older
+-- version of this migration. The cast is safe because every value in
+-- the column is either NULL or a digit string set by the indexer.
+DO $$
+BEGIN
+    IF EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_name='doc_chunks' AND column_name='area_number'
+          AND data_type='text'
+    ) THEN
+        ALTER TABLE doc_chunks ALTER COLUMN area_number
+          TYPE int USING NULLIF(area_number, '')::int;
+    END IF;
+END$$;
+
+-- The ivfflat index is created with `lists = 100` (a reasonable default
+-- for corpora up to ~100k chunks). Build quality depends on the table
+-- being non-empty at index creation time: an index built on an empty
+-- table has degenerate centroids and recall suffers until the first
+-- REINDEX. After the first bulk populate, run:
+--     REINDEX INDEX doc_chunks_embedding_idx;
+-- For larger corpora the pgvector guideline is `lists ≈ rows/1000`.
 CREATE INDEX IF NOT EXISTS doc_chunks_embedding_idx
   ON doc_chunks USING ivfflat (embedding vector_cosine_ops) WITH (lists = 100);
 CREATE INDEX IF NOT EXISTS doc_chunks_source_idx     ON doc_chunks(source_file);
@@ -84,7 +106,7 @@ CREATE TABLE IF NOT EXISTS decisions (
     source_doc    text        NOT NULL,
     decided_on    date,
     cross_refs    text[],
-    superseded_by int         REFERENCES decisions(id),
+    superseded_by int         REFERENCES decisions(id) ON DELETE SET NULL,
     updated_at    timestamptz DEFAULT now()
 );
 

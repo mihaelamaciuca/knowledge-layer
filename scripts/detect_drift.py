@@ -49,30 +49,47 @@ PRIORITY = {
 
 # ─── Signal 1: stale strings ────────────────────────────────────────────
 def _signal_stale_strings() -> list[dict]:
-    """Run scripts/stale_strings.py via JSON mode and convert to drift items."""
+    """Run scripts/stale_strings.py via JSON mode and convert to drift items.
+
+    Subprocess is bounded with a 30s timeout. Malformed JSON output, missing
+    expected fields, and non-zero exits all degrade gracefully to an empty
+    result so this signal can never block the rest of the pipeline.
+    """
     script = Path(__file__).resolve().parent / "stale_strings.py"
     try:
         out = subprocess.run(
             [sys.executable, str(script), "--json"],
-            capture_output=True, text=True, check=False,
+            capture_output=True, text=True, check=False, timeout=30,
         )
-        if not out.stdout:
-            return []
+    except (FileNotFoundError, OSError, subprocess.TimeoutExpired) as exc:
+        sys.stderr.write(f"_signal_stale_strings: subprocess failed: {exc}\n")
+        return []
+
+    if out.returncode != 0 and out.stderr:
+        sys.stderr.write(f"_signal_stale_strings: stderr: {out.stderr[:500]}\n")
+    if not out.stdout:
+        return []
+    try:
         hits = json.loads(out.stdout)
-    except Exception:
+    except json.JSONDecodeError as exc:
+        sys.stderr.write(f"_signal_stale_strings: malformed JSON: {exc}\n")
         return []
 
     items: list[dict] = []
     for h in hits:
-        items.append({
-            "file": h["file"],
-            "line": h["line"],
-            "signal": "stale-string",
-            "reason": h["reason"],
-            "authoritative_source": None,
-            "suggested_replacement": h.get("replacement"),
-            "snippet": h["text"][:200],
-        })
+        try:
+            items.append({
+                "file": h["file"],
+                "line": h["line"],
+                "signal": "stale-string",
+                "reason": h["reason"],
+                "authoritative_source": None,
+                "suggested_replacement": h.get("replacement"),
+                "snippet": h.get("text", "")[:200],
+            })
+        except (KeyError, TypeError) as exc:
+            sys.stderr.write(f"_signal_stale_strings: skipping malformed hit ({exc}): {h!r}\n")
+            continue
     return items
 
 
@@ -113,33 +130,42 @@ def _signal_dangling_refs() -> list[dict]:
 
 
 # ─── Signal 3: dependency-out-of-date ──────────────────────────────────
-def _file_committed_at(path: Path) -> str | None:
+def _file_committed_at(path: Path):
+    """Return a timezone-aware datetime for the file's last commit, or None."""
     try:
         out = subprocess.run(
             ["git", "log", "-1", "--pretty=format:%cI", "--", str(path)],
             cwd=str(DOCS_DIR.parent),
-            capture_output=True, text=True, check=False,
+            capture_output=True, text=True, check=False, timeout=10,
         )
-        return out.stdout.strip() or None
-    except (FileNotFoundError, OSError):
+    except (FileNotFoundError, OSError, subprocess.TimeoutExpired):
+        return None
+    raw = out.stdout.strip()
+    if not raw:
+        return None
+    try:
+        from datetime import datetime
+        return datetime.fromisoformat(raw)
+    except ValueError:
         return None
 
 
 def _signal_dep_out_of_date() -> list[dict]:
-    """For every doc A with depends-on B, flag if B's commit > A's commit."""
+    """For every doc A with depends-on B, flag if B's commit > A's commit.
+
+    Comparison is done on timezone-aware datetimes parsed from `git log
+    --pretty=format:%cI` so commits across mixed timezones order
+    correctly.
+    """
     md_files = sorted(DOCS_DIR.glob("*.md"))
-    commits: dict[str, str] = {}
-    for p in md_files:
-        ts = _file_committed_at(p)
-        if ts:
-            commits[p.stem] = ts
+    commits = {p.stem: _file_committed_at(p) for p in md_files}
 
     items: list[dict] = []
     for path in md_files:
         text = path.read_text(encoding="utf-8")
         metadata, _ = parse_frontmatter_v2(text)
         a_ts = commits.get(path.stem)
-        if not a_ts:
+        if a_ts is None:
             continue
         for ref in metadata.get("depends-on") or []:
             ref = str(ref).strip().strip('"\'')
@@ -148,14 +174,18 @@ def _signal_dep_out_of_date() -> list[dict]:
             if not ref or ref.startswith("area-"):
                 continue
             b_ts = commits.get(ref)
-            if not b_ts:
+            if b_ts is None:
                 continue
             if b_ts > a_ts:
                 items.append({
                     "file": f"docs/{path.name}",
                     "line": None,
                     "signal": "dep-out-of-date",
-                    "reason": f"depends-on `{ref}` was committed at {b_ts} (newer than this doc's {a_ts})",
+                    "reason": (
+                        f"depends-on `{ref}` was committed at "
+                        f"{b_ts.isoformat()} (newer than this doc's "
+                        f"{a_ts.isoformat()})"
+                    ),
                     "authoritative_source": f"docs/{ref}.md",
                     "suggested_replacement": None,
                     "snippet": None,

@@ -31,8 +31,11 @@ REPORT_PATH = Path(__file__).resolve().parent.parent / "docs-standards-audit.md"
 RENAME_MAP_PATH = Path(__file__).resolve().parent / "doc_rename_map.json"
 
 STATUS_NORMALISE = {
+    # Map legacy / sloppy status values to the canonical vocabulary in
+    # 00-pol-document-standards.md. Extend if your project migrates from
+    # another convention; otherwise leave as-is.
     "in progress": "in-progress",
-    "active": "complete",
+    "active": "complete",  # legacy tracker convention; complete is the standards value
 }
 
 VALID_TYPES = {"spec", "res", "str", "dec", "pol", "fwk"}
@@ -211,10 +214,42 @@ def check_dependencies(
 
 
 def load_rename_map() -> dict:
+    """Load doc_rename_map.json, returning empty defaults on error.
+
+    Validates the shape so a malformed map (e.g. `area_redirects` set to
+    a string instead of an object) doesn't crash `rewrite_ref` deep in
+    the audit loop.
+    """
+    empty = {"renames": {}, "per_file_renames": {}, "area_redirects": {}, "delete_refs": []}
     if not RENAME_MAP_PATH.exists():
-        return {"renames": {}, "per_file_renames": {}, "area_redirects": {}, "delete_refs": []}
-    with RENAME_MAP_PATH.open() as f:
-        return json.load(f)
+        return empty
+    try:
+        with RENAME_MAP_PATH.open() as f:
+            data = json.load(f)
+    except (OSError, json.JSONDecodeError) as exc:
+        print(f"Warning: doc_rename_map.json could not be loaded ({exc}); using empty defaults.")
+        return empty
+
+    if not isinstance(data, dict):
+        print("Warning: doc_rename_map.json is not a JSON object; using empty defaults.")
+        return empty
+
+    expected = {
+        "renames": dict,
+        "per_file_renames": dict,
+        "area_redirects": dict,
+        "delete_refs": list,
+    }
+    for k, t in expected.items():
+        if not isinstance(data.get(k, t()), t):
+            print(
+                f"Warning: doc_rename_map.json field `{k}` is not a "
+                f"{t.__name__}; using empty default for it."
+            )
+            data[k] = t()
+        elif k not in data:
+            data[k] = t()
+    return data
 
 
 def rewrite_ref(ref, filename: str, rmap: dict) -> str | None:

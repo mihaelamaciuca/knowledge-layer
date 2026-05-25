@@ -2,20 +2,22 @@
 
 Used by the FastMCP `search_docs` tool and the FastAPI `/search` endpoint.
 
-Hybrid scoring: combined = 0.7 × vector_sim + 0.3 × ts_rank
-Rows surface if either signal beats its threshold; the combined score
-drives ordering. Pure-vector queries still return the v1 top-k; pure-
-lexical (exact phrase, decision id, advisory-lock number) hits surface
+Hybrid scoring: combined = VECTOR_WEIGHT * vec_sim + LEXICAL_WEIGHT * lex_rank
+A row qualifies for ranking if it beats either signal: vector cosine
+similarity above MIN_SIMILARITY, OR a non-empty `ts_rank` match. The
+combined score drives ordering with a deterministic tiebreaker on `id`.
+Pure-vector queries still return the natural-language top-k; pure-
+lexical hits (exact phrase, decision id, advisory-lock number) surface
 even when their embeddings are far from the query.
 
 Authority awareness: rows with `status = 'superseded'` are excluded by
-default. Pass `include_superseded=True` to include them, they are
-returned with a `[SUPERSEDED, see <target>]` banner prepended to
-`content`.
+default. Pass `include_superseded=True` to include them; they return
+with a `[SUPERSEDED, see <target>]` banner prepended to `content`.
 
 Every call writes a row to `query_log` (scrubbed query + top-k ids +
-latency + caller). The caller field is best-effort: FastMCP tools do
-not have a direct handle on the HTTP context, so we tag MCP calls
+latency + caller) including on the error path, so misconfiguration is
+visible in telemetry. The caller field is best-effort: FastMCP tools
+do not have a direct handle on the HTTP context, so we tag MCP calls
 "mcp" and direct REST calls "rest".
 """
 import logging
@@ -23,10 +25,9 @@ import os
 import time
 import uuid
 
-import psycopg2
-from openai import OpenAI
-
+from rag_core.embed import get_client
 from rag_core.scrub import scrub_content
+from src.db import connection
 
 log = logging.getLogger(__name__)
 
@@ -40,12 +41,8 @@ VECTOR_WEIGHT = 0.7
 LEXICAL_WEIGHT = 0.3
 
 
-def _get_openai_client() -> OpenAI:
-    return OpenAI(api_key=os.environ["OPENAI_API_KEY"])
-
-
 def embed_query(query: str) -> list[float]:
-    client = _get_openai_client()
+    client = get_client()
     response = client.embeddings.create(
         model=EMBEDDING_MODEL,
         input=query,
@@ -100,7 +97,7 @@ def _build_search_sql(filters: dict) -> tuple[str, list]:
     )
     SELECT *, ({VECTOR_WEIGHT} * vec_sim + {LEXICAL_WEIGHT} * lex_rank) AS score
     FROM ranked
-    ORDER BY score DESC
+    ORDER BY score DESC, id ASC
     LIMIT %s;
     """
     return sql, extras
@@ -126,18 +123,30 @@ def _apply_supersession_banner(rows: list[dict]) -> list[dict]:
     return out
 
 
-def _log_query(cur, *, query: str, top_k_ids: list[uuid.UUID],
-               latency_ms: int, caller: str) -> None:
-    """Write one row to query_log. Best-effort, caught and logged on failure."""
+def _log_query(*, query: str, top_k_ids: list[uuid.UUID],
+               latency_ms: int, caller: str, error: str | None = None) -> None:
+    """Write one row to query_log using a short-lived connection.
+
+    Best-effort: failures here are logged and swallowed so the original
+    search call's outcome is not obscured by telemetry trouble.
+    """
     try:
         scrubbed = scrub_content(query)
-        cur.execute(
-            """
-            INSERT INTO query_log (query_scrubbed, top_k_ids, latency_ms, caller)
-            VALUES (%s, %s, %s, %s)
-            """,
-            (scrubbed[:500], top_k_ids, latency_ms, caller),
-        )
+        with connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO query_log (query_scrubbed, top_k_ids, latency_ms, caller)
+                    VALUES (%s, %s, %s, %s)
+                    """,
+                    (
+                        (scrubbed[:500] + (f" [ERROR: {error[:200]}]" if error else "")),
+                        top_k_ids,
+                        latency_ms,
+                        caller,
+                    ),
+                )
+            conn.commit()
     except Exception as exc:
         log.warning("query_log insert failed: %s", exc)
 
@@ -151,12 +160,12 @@ def search_docs(
     doc_type: str | None = None,
     include_superseded: bool = False,
     caller: str = "mcp",
-) -> list[dict]:
-    """Hybrid vector+lexical search over the index. Returns top-k rows.
+) -> list[dict] | dict:
+    """Hybrid vector+lexical search over the index.
 
-    Each row dict contains all extended columns plus computed `vec_sim`,
-    `lex_rank`, and `score`. Rows with `status='superseded'` are excluded
-    unless `include_superseded=True`, in which case they are bannered.
+    Returns a list of top-k row dicts on success. On error, returns a
+    `{"error": "<message>", "results": []}` dict so callers can
+    distinguish "no results" from "DB unreachable".
     """
     k = min(max(1, k), MAX_K)
     start = time.monotonic()
@@ -165,7 +174,10 @@ def search_docs(
         embedding = embed_query(query)
     except Exception as exc:
         log.error("embedding failed: %s", exc)
-        return []
+        latency_ms = int((time.monotonic() - start) * 1000)
+        _log_query(query=query, top_k_ids=[], latency_ms=latency_ms,
+                   caller=caller, error=f"embedding: {exc}")
+        return {"error": f"embedding failed: {exc}", "results": []}
     embedding_str = str(embedding)
 
     filters = {
@@ -177,30 +189,31 @@ def search_docs(
     sql, extras = _build_search_sql(filters)
     params = [embedding_str, query, embedding_str, MIN_SIMILARITY, query] + extras + [k]
 
+    rows: list[dict] = []
+    error_msg: str | None = None
     try:
-        conn = psycopg2.connect(os.environ["DATABASE_URL"])
-        try:
+        with connection() as conn:
             with conn.cursor() as cur:
                 cur.execute(sql, params)
                 cols = [desc[0] for desc in cur.description]
                 rows = [dict(zip(cols, r)) for r in cur.fetchall()]
-
                 rows = _apply_supersession_banner(rows)
-                latency_ms = int((time.monotonic() - start) * 1000)
-                _log_query(
-                    cur,
-                    query=query,
-                    top_k_ids=[r["id"] for r in rows],
-                    latency_ms=latency_ms,
-                    caller=caller,
-                )
-                conn.commit()
-        finally:
-            conn.close()
+            conn.commit()
     except Exception as exc:
         log.error("hybrid search failed: %s", exc)
-        return []
+        error_msg = str(exc)
 
+    latency_ms = int((time.monotonic() - start) * 1000)
+    _log_query(
+        query=query,
+        top_k_ids=[r["id"] for r in rows] if rows else [],
+        latency_ms=latency_ms,
+        caller=caller,
+        error=error_msg,
+    )
+
+    if error_msg is not None:
+        return {"error": error_msg, "results": []}
     return rows
 
 
@@ -218,14 +231,11 @@ ORDER BY max(updated_at) ASC;
 
 def check_index_health() -> dict:
     try:
-        conn = psycopg2.connect(os.environ["DATABASE_URL"])
-        try:
+        with connection() as conn:
             with conn.cursor() as cur:
                 cur.execute(HEALTH_SQL)
                 cols = [desc[0] for desc in cur.description]
                 rows = cur.fetchall()
-        finally:
-            conn.close()
     except Exception as exc:
         log.error("index health check failed: %s", exc)
         return {"error": str(exc)}

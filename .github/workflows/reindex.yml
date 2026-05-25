@@ -15,7 +15,7 @@ on:
   workflow_dispatch:
     inputs:
       confirm:
-        description: 'Type REINDEX to confirm, this DELETEs all chunks and re-embeds every doc. Runtime scales with corpus size.'
+        description: 'Type REINDEX (case-insensitive) to confirm, this DELETEs all chunks and re-embeds every doc. Runtime scales with corpus size.'
         required: true
         type: string
       verify:
@@ -23,6 +23,9 @@ on:
         required: false
         type: boolean
         default: true
+
+permissions:
+  contents: read
 
 jobs:
   reindex:
@@ -33,7 +36,8 @@ jobs:
     timeout-minutes: 60
     steps:
       - name: Confirm trigger
-        if: github.event.inputs.confirm != 'REINDEX'
+        # Case-insensitive: accept REINDEX, reindex, Reindex.
+        if: ${{ ! contains(fromJson('["REINDEX","reindex","Reindex"]'), github.event.inputs.confirm) }}
         run: |
           echo "::error::Confirmation not provided. Type 'REINDEX' in the input field to proceed."
           exit 1

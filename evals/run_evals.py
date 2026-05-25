@@ -53,12 +53,17 @@ def _matches(expected_slug: str, source_file: str) -> bool:
 
     `source_file` in the DB is typically the bare slug (no `.md`); we
     also accept full paths and `.md`-suffixed values for flexibility.
+
+    Matching is exact or "expected_slug followed by a hyphen" so a
+    versioned rename (`02-dec-trial-length` -> `02-dec-trial-length-v2`)
+    still matches, but substrings (`-old`, `prior-`) don't produce
+    false positives.
     """
     s = source_file
     if s.endswith(".md"):
         s = s[:-3]
     s = s.rsplit("/", 1)[-1]
-    return s == expected_slug or s.startswith(expected_slug + "-") or expected_slug in s
+    return s == expected_slug or s.startswith(expected_slug + "-")
 
 
 def score_one(golden: dict, results: list[dict]) -> dict:
@@ -131,7 +136,18 @@ def main() -> int:
         if "query" not in g:
             print(f"Error: golden {g.get('id', '<unnamed>')!r} has no `query`", file=sys.stderr)
             return 2
-        k = int(g.get("k", 10))
+        try:
+            k = int(g.get("k", 10))
+        except (TypeError, ValueError):
+            print(f"Error: golden {g.get('id', '<unnamed>')!r} has non-integer `k`", file=sys.stderr)
+            return 2
+        if k < 1 or k > 20:
+            print(
+                f"Error: golden {g.get('id', '<unnamed>')!r} has k={k}; "
+                f"valid range is 1..20 (search_docs clamps server-side).",
+                file=sys.stderr,
+            )
+            return 2
         filters = g.get("filters") or {}
         results = search_docs(
             g["query"], k,

@@ -46,7 +46,7 @@ ON CONFLICT (content_hash) DO UPDATE SET
 
 
 def upsert_chunk(cur, *, source_file: str, section_header: str,
-                 area_number: str | None, doc_type: str | None,
+                 area_number: int | None, doc_type: str | None,
                  content: str, content_hash: str,
                  embedding_pgvector: str,
                  status: str | None = None,

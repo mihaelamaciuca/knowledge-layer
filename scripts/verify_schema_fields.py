@@ -96,7 +96,7 @@ def main() -> int:
             print(f"  - {f}")
         return 1
 
-    print("\nv2 verification passed.")
+    print("\nSchema field coverage verified.")
     return 0
 
 

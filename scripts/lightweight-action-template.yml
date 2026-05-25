@@ -1,11 +1,17 @@
 # ─────────────────────────────────────────────────────────────────────────────
-# RAG Sync. Lightweight Template for Code Repos
+# RAG Sync, Lightweight Template for Code Repos
 # ─────────────────────────────────────────────────────────────────────────────
+# This file is meant to be copied INTO OTHER code repos (an API service,
+# a mobile build, etc.) so their build logs flow into the same knowledge
+# layer as the doc corpus.
+#
 # Setup:
-#   1. Copy this file to .github/workflows/sync-to-rag.yml in your repo.
-#   2. Replace every occurrence of REPO_NAME below with the actual repo name
-#      (e.g. "myapp-api").
-#   3. Add GitHub Actions secrets to the repo:
+#   1. Copy this file to .github/workflows/sync-to-rag.yml in the target repo.
+#   2. Replace every occurrence of {{CODE_REPO_NAME}} below with the target
+#      repo's name (e.g. "myapp-api"). This placeholder is intentionally
+#      distinct from `{{PROJECT_NAME}}` (which `scripts/init.sh` swaps in
+#      THIS repo) so the two substitutions can't collide.
+#   3. Add GitHub Actions secrets to the target repo:
 #        DATABASE_URL
 #        OPENAI_API_KEY
 # ─────────────────────────────────────────────────────────────────────────────
@@ -119,8 +125,8 @@ jobs:
                           final.extend(_split_by_size(sub, h3content))
               return final
 
-          # Replace REPO_NAME with the actual repository name
-          REPO_NAME = "REPO_NAME"
+          # Replace {{CODE_REPO_NAME}} with the actual repository name
+          {{CODE_REPO_NAME}} = "{{CODE_REPO_NAME}}"
 
           files = sys.argv[1].split()
           conn = psycopg2.connect(os.environ["DATABASE_URL"])
@@ -146,7 +152,7 @@ jobs:
               p = Path(filepath)
               if not p.exists():
                   continue
-              source_file = f"{REPO_NAME}/{filepath}"
+              source_file = f"{{{CODE_REPO_NAME}}}/{filepath}"
               text = p.read_text(encoding="utf-8")
               metadata, body = parse_frontmatter(text)
 
@@ -190,8 +196,8 @@ jobs:
           import os, sys
           import psycopg2
 
-          # Replace REPO_NAME with the actual repository name
-          REPO_NAME = "REPO_NAME"
+          # Replace {{CODE_REPO_NAME}} with the actual repository name
+          {{CODE_REPO_NAME}} = "{{CODE_REPO_NAME}}"
 
           files = sys.argv[1].split()
           conn = psycopg2.connect(os.environ["DATABASE_URL"])
@@ -199,7 +205,7 @@ jobs:
           cur = conn.cursor()
 
           for filepath in files:
-              source_file = f"{REPO_NAME}/{filepath}"
+              source_file = f"{{{CODE_REPO_NAME}}}/{filepath}"
               cur.execute("DELETE FROM doc_chunks WHERE source_file = %s", (source_file,))
               print(f"  Deleted chunks for {source_file}")
 

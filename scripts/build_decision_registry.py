@@ -72,6 +72,23 @@ def collect_decisions() -> tuple[list[dict], dict[str, dict]] | None:
         if not entries:
             continue
         area = fm.get("area")
+        if area is None:
+            print(
+                f"ERROR {path.stem}: frontmatter has no `area` field; "
+                f"the decisions table requires an int area.",
+                file=sys.stderr,
+            )
+            return None
+        if not isinstance(area, int):
+            try:
+                area = int(area)
+            except (TypeError, ValueError):
+                print(
+                    f"ERROR {path.stem}: frontmatter `area` ({area!r}) is "
+                    f"not an integer.",
+                    file=sys.stderr,
+                )
+                return None
         source_doc = path.stem
         for entry in entries:
             missing = [f for f in REQUIRED_FIELDS if not entry.get(f)]
@@ -106,6 +123,50 @@ def collect_decisions() -> tuple[list[dict], dict[str, dict]] | None:
     return decisions, by_key
 
 
+def detect_cycles(decisions: list[dict]) -> list[str] | None:
+    """Return the cycle path if the supersedes graph contains a cycle, else None.
+
+    Uses iterative DFS with a recursion stack so the chain `A supersedes B,
+    B supersedes A` (and longer variants) is flagged before we try to
+    write the cycle to Postgres.
+    """
+    successors: dict[str, str] = {}
+    keys: set[str] = set()
+    for d in decisions:
+        keys.add(d["decision_key"])
+        if d["supersedes"]:
+            successors[d["decision_key"]] = d["supersedes"]
+
+    color: dict[str, int] = {k: 0 for k in keys}  # 0 white, 1 grey, 2 black
+
+    for start in keys:
+        if color[start] != 0:
+            continue
+        stack: list[tuple[str, str | None]] = [(start, successors.get(start))]
+        path: list[str] = []
+        while stack:
+            node, target = stack[-1]
+            if color[node] == 0:
+                color[node] = 1
+                path.append(node)
+            if target is None or target not in keys:
+                color[node] = 2
+                stack.pop()
+                path.pop()
+                continue
+            if color[target] == 1:
+                cycle_start = path.index(target)
+                return path[cycle_start:] + [target]
+            if color[target] == 0:
+                stack.append((target, successors.get(target)))
+                continue
+            # target is black: already explored, no cycle through it
+            color[node] = 2
+            stack.pop()
+            path.pop()
+    return None
+
+
 def main() -> int:
     if not DOCS_DIR.exists():
         print(f"Error: {DOCS_DIR} does not exist", file=sys.stderr)
@@ -124,10 +185,42 @@ def main() -> int:
         print("No decisions found in any docs/*-dec-*.md frontmatter.")
         return 0
 
+    cycle = detect_cycles(decisions)
+    if cycle is not None:
+        print(
+            "ERROR unresolvable supersedes cycle: "
+            + " -> ".join(f"`{k}`" for k in cycle),
+            file=sys.stderr,
+        )
+        return 1
+
     conn = psycopg2.connect(os.environ["DATABASE_URL"])
+    conn.autocommit = False
     cur = conn.cursor()
 
-    # Pass 1, upsert each decision; reset superseded_by until pass 2.
+    try:
+        _upsert_pass(cur, decisions)
+        _wire_supersedes(cur, decisions, by_key)
+    except Exception as exc:
+        conn.rollback()
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 1
+
+    conn.commit()
+    cur.execute("SELECT count(*) FROM decisions")
+    (total,) = cur.fetchone()
+    cur.close()
+    conn.close()
+    print(
+        f"Upserted {len(decisions)} decision(s) across "
+        f"{len({d['source_doc'] for d in decisions})} file(s). "
+        f"decisions table now holds {total} row(s)."
+    )
+    return 0
+
+
+def _upsert_pass(cur, decisions: list[dict]) -> None:
+    """Pass 1, upsert each decision; reset superseded_by until pass 2."""
     for d in decisions:
         cur.execute(
             """
@@ -152,7 +245,9 @@ def main() -> int:
             ),
         )
 
-    # Pass 2, wire up superseded_by pointers.
+def _wire_supersedes(cur, decisions: list[dict], by_key: dict[str, dict]) -> None:
+    """Pass 2, wire up superseded_by pointers. Cycle detection has
+    already run, so any unresolved predecessor is a genuine error."""
     for d in decisions:
         pred_key = d["supersedes"]
         if not pred_key:
@@ -160,13 +255,10 @@ def main() -> int:
         cur.execute("SELECT id FROM decisions WHERE decision_key = %s", (pred_key,))
         row = cur.fetchone()
         if row is None:
-            print(
-                f"ERROR {d['source_doc']}: decision {d['decision_key']!r} "
-                f"declares supersedes={pred_key!r} but no such decision exists",
-                file=sys.stderr,
+            raise RuntimeError(
+                f"{d['source_doc']}: decision {d['decision_key']!r} "
+                f"declares supersedes={pred_key!r} but no such decision exists"
             )
-            conn.rollback()
-            return 1
         cur.execute(
             """
             UPDATE decisions SET superseded_by = (
@@ -176,18 +268,6 @@ def main() -> int:
             """,
             (d["decision_key"], pred_key),
         )
-
-    conn.commit()
-    cur.execute("SELECT count(*) FROM decisions")
-    (total,) = cur.fetchone()
-    cur.close()
-    conn.close()
-    print(
-        f"Upserted {len(decisions)} decision(s) across "
-        f"{len({d['source_doc'] for d in decisions})} file(s). "
-        f"decisions table now holds {total} row(s)."
-    )
-    return 0
 
 
 if __name__ == "__main__":

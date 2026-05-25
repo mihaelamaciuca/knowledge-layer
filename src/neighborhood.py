@@ -14,11 +14,9 @@ Given a doc filename (bare form like `10-dec-pricing` OR full form like
 Closes Contract 1. Impact-target check, in 00-spec-retrieval-contract.
 """
 import logging
-import os
-
-import psycopg2
 
 from rag_core.relationships import to_bare, to_full
+from src.db import connection
 
 log = logging.getLogger(__name__)
 
@@ -108,8 +106,7 @@ def get_doc_neighborhood(filename: str,
     full = to_full(bare)
 
     try:
-        conn = psycopg2.connect(os.environ["DATABASE_URL"])
-        try:
+        with connection() as conn:
             with conn.cursor() as cur:
                 # Outgoing edges, what this doc declares.
                 cur.execute(
@@ -135,8 +132,6 @@ def get_doc_neighborhood(filename: str,
                 doc_meta = _fetch_doc_meta(cur, sorted(file_targets))
 
                 supersedes_chain = _build_supersedes_chain(cur, full)
-        finally:
-            conn.close()
     except Exception as exc:
         log.error("get_doc_neighborhood failed: %s", exc)
         return {"error": str(exc)}

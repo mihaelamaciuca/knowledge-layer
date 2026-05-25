@@ -11,6 +11,11 @@ Usage:
 Environment variables (loaded from .env if present):
     DATABASE_URL    direct Postgres connection string
     OPENAI_API_KEY  for embedding generation
+
+Exit codes:
+    0 - all files processed (some may have produced zero chunks)
+    1 - one or more files failed; details printed above
+    2 - environment or argument error
 """
 import argparse
 import os
@@ -38,6 +43,20 @@ from rag_core.embed import get_client as get_openai_client
 REPO_PREFIX = "{{PROJECT_NAME}}"
 
 
+def _check_placeholder_substituted() -> None:
+    """Refuse to run if the {{PROJECT_NAME}} placeholder hasn't been
+    swapped by `scripts/init.sh`. Indexing under the literal placeholder
+    would poison every chunk's source_file."""
+    if "{{" in REPO_PREFIX or "}}" in REPO_PREFIX:
+        print(
+            f"Error: REPO_PREFIX still contains the literal placeholder "
+            f"({REPO_PREFIX!r}). Run `scripts/init.sh` to set your project "
+            f"name before indexing.",
+            file=sys.stderr,
+        )
+        sys.exit(2)
+
+
 def _file_git_provenance(file_path: Path, repo_root: Path) -> tuple[str | None, str | None]:
     """Return (git_sha, git_committed_at_iso) for the file's last commit.
 
@@ -51,26 +70,29 @@ def _file_git_provenance(file_path: Path, repo_root: Path) -> tuple[str | None, 
             capture_output=True,
             text=True,
             check=False,
+            timeout=10,
         )
         if out.returncode != 0 or not out.stdout.strip():
             return (None, None)
         sha, _, committed_at = out.stdout.strip().partition(" ")
         return (sha or None, committed_at or None)
-    except (FileNotFoundError, OSError):
+    except (FileNotFoundError, OSError, subprocess.TimeoutExpired):
         return (None, None)
 
 
-def main() -> None:
+def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--docs-dir", required=True, help="Path to the docs/ folder")
     parser.add_argument("--full-reindex", action="store_true",
                         help="Delete all existing chunks before indexing")
     args = parser.parse_args()
 
+    _check_placeholder_substituted()
+
     docs_dir = Path(args.docs_dir).resolve()
     if not docs_dir.is_dir():
         print(f"Error: {docs_dir} is not a directory", file=sys.stderr)
-        sys.exit(1)
+        return 2
 
     # Repo root for git provenance lookups (docs/ is usually one level below).
     repo_root = docs_dir.parent
@@ -78,120 +100,108 @@ def main() -> None:
     for var in ("DATABASE_URL", "OPENAI_API_KEY"):
         if not os.environ.get(var):
             print(f"Error: {var} is not set", file=sys.stderr)
-            sys.exit(1)
+            return 2
 
     print("Script started")
     print(f"  DATABASE_URL:  {os.environ['DATABASE_URL'][:40]}...")
     print(f"  OPENAI_API_KEY: {os.environ['OPENAI_API_KEY'][:10]}...")
 
     conn = psycopg2.connect(os.environ["DATABASE_URL"])
-    conn.autocommit = True
-    cur = conn.cursor()
+    # Explicit transaction control: each file is one transaction so a
+    # mid-run failure doesn't leave partial state in the index.
+    conn.autocommit = False
     openai_client = get_openai_client()
 
     if args.full_reindex:
-        print("Full reindex requested, deleting all existing chunks...")
-        cur.execute("DELETE FROM doc_chunks")
-        print("  Cleared.")
+        with conn.cursor() as cur:
+            print("Full reindex requested, deleting all existing chunks...")
+            cur.execute("DELETE FROM doc_chunks")
+            cur.execute("DELETE FROM doc_relationships")
+            cur.execute("DELETE FROM doc_outlines")
+        conn.commit()
+        print("  Cleared doc_chunks, doc_relationships, doc_outlines.")
 
-    print("Fetching existing chunk hashes from Postgres...")
-    existing_hashes: set[str] = set()
-    try:
-        existing_hashes = fetch_existing_hashes(cur)
-        print(f"  Found {len(existing_hashes)} existing chunks")
-    except Exception as exc:
-        print(f"  Warning: could not fetch existing hashes ({exc}), will attempt all upserts")
-        conn.rollback()
+    # In incremental mode we delete-then-insert per file so edits don't
+    # leave orphan chunks from the prior content_hash. existing_hashes is
+    # therefore unused on that path (every file is re-embedded).
+    delete_before_upsert = not args.full_reindex
+    existing_hashes: set[str] | None = None
+    if args.full_reindex:
+        with conn.cursor() as cur:
+            try:
+                existing_hashes = fetch_existing_hashes(cur)
+                print(f"  Hash cache primed with {len(existing_hashes)} entries")
+            except Exception as exc:
+                print(f"  Warning: could not fetch existing hashes ({exc})")
+                existing_hashes = None
+        conn.commit()
 
+    failures: list[str] = []
     total_files = 0
     total_upserted = 0
     total_skipped = 0
 
-    # ── Markdown files ────────────────────────────────────────────────────
     md_files = sorted(docs_dir.rglob("*.md"))
-    print(f"Found {len(md_files)} Markdown files in {docs_dir}\n")
+    html_files = sorted(docs_dir.rglob("*.html"))
+    print(f"Found {len(md_files)} Markdown + {len(html_files)} HTML files in {docs_dir}\n")
+
+    def _process_one(path: Path, processor) -> None:
+        nonlocal total_files, total_upserted, total_skipped
+        rel_path = path.relative_to(docs_dir)
+        source_file = f"{REPO_PREFIX}/docs/{rel_path}"
+        total_files += 1
+
+        git_sha, git_committed_at = _file_git_provenance(path, repo_root)
+
+        try:
+            with conn.cursor() as cur:
+                upserted, skipped = processor(
+                    cur,
+                    file_path=path,
+                    source_file=source_file,
+                    openai_client=openai_client,
+                    existing_hashes=existing_hashes,
+                    delete_before_upsert=delete_before_upsert,
+                    git_sha=git_sha,
+                    git_committed_at=git_committed_at,
+                )
+            conn.commit()
+        except Exception as exc:
+            conn.rollback()
+            failures.append(str(rel_path))
+            print(f"  [FAIL] {rel_path}: {exc}")
+            return
+
+        total_upserted += upserted
+        total_skipped += skipped
+        total_chunks = upserted + skipped
+        if total_chunks == 0:
+            print(f"  [{total_files}/{len(md_files) + len(html_files)}] {rel_path}, no chunks")
+        else:
+            print(
+                f"  [{total_files}/{len(md_files) + len(html_files)}] {rel_path}, "
+                f"{total_chunks} chunks: {upserted} upserted, {skipped} skipped"
+            )
 
     for md_path in md_files:
-        rel_path = md_path.relative_to(docs_dir)
-        source_file = f"{REPO_PREFIX}/docs/{rel_path}"
-        total_files += 1
-
-        git_sha, git_committed_at = _file_git_provenance(md_path, repo_root)
-
-        try:
-            upserted, skipped = process_markdown_file(
-                cur,
-                file_path=md_path,
-                source_file=source_file,
-                openai_client=openai_client,
-                existing_hashes=existing_hashes,
-                delete_before_upsert=False,
-                git_sha=git_sha,
-                git_committed_at=git_committed_at,
-            )
-        except Exception as exc:
-            print(f"  [{total_files}/{len(md_files)}] {rel_path}, error: {exc}")
-            conn.rollback()
-            continue
-
-        total_upserted += upserted
-        total_skipped += skipped
-        total_chunks = upserted + skipped
-        if total_chunks == 0:
-            print(f"  [{total_files}/{len(md_files)}] {rel_path}, no chunks, skipping")
-        else:
-            print(
-                f"  [{total_files}/{len(md_files)}] {rel_path}, "
-                f"{total_chunks} chunks: {upserted} upserted, {skipped} skipped"
-            )
-
-    # ── HTML tracker files ────────────────────────────────────────────────
-    html_files = sorted(docs_dir.rglob("*.html"))
-    if html_files:
-        print(f"\nFound {len(html_files)} HTML files in {docs_dir}\n")
-
+        _process_one(md_path, process_markdown_file)
     for html_path in html_files:
-        rel_path = html_path.relative_to(docs_dir)
-        source_file = f"{REPO_PREFIX}/docs/{rel_path}"
-        total_files += 1
+        _process_one(html_path, process_html_file)
 
-        git_sha, git_committed_at = _file_git_provenance(html_path, repo_root)
-
-        try:
-            upserted, skipped = process_html_file(
-                cur,
-                file_path=html_path,
-                source_file=source_file,
-                openai_client=openai_client,
-                existing_hashes=existing_hashes,
-                delete_before_upsert=False,
-                git_sha=git_sha,
-                git_committed_at=git_committed_at,
-            )
-        except Exception as exc:
-            print(f"  {rel_path}, error: {exc}")
-            conn.rollback()
-            continue
-
-        total_upserted += upserted
-        total_skipped += skipped
-        total_chunks = upserted + skipped
-        if total_chunks == 0:
-            print(f"  {rel_path}, no chunks, skipping")
-        else:
-            print(
-                f"  {rel_path}, "
-                f"{total_chunks} chunks: {upserted} upserted, {skipped} skipped"
-            )
-
-    cur.close()
     conn.close()
 
-    print(f"\nDone.")
+    print()
+    print("Done.")
     print(f"  Files processed:  {total_files}")
     print(f"  Chunks upserted:  {total_upserted}")
     print(f"  Chunks skipped:   {total_skipped}")
+    if failures:
+        print(f"  Files failed:     {len(failures)}")
+        for f in failures:
+            print(f"    - {f}")
+        return 1
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

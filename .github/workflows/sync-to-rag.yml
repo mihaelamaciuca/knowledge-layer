@@ -6,6 +6,9 @@ on:
     paths:
       - "docs/**"
 
+permissions:
+  contents: read
+
 jobs:
   sync:
     runs-on: ubuntu-latest
@@ -13,13 +16,25 @@ jobs:
       - name: Checkout repo
         uses: actions/checkout@v4
         with:
-          fetch-depth: 2 # need HEAD~1 for diff
+          # Fetch enough history to diff against HEAD~1 in the normal
+          # case; on the very first commit there is no HEAD~1 and the
+          # diff step falls back to "treat every doc as added".
+          fetch-depth: 10
 
       - name: Identify changed docs
         id: diff
+        # `docs/**` (recursive) is the trigger path; the diff filters
+        # match both top-level files and any subdirectory the corpus
+        # might grow into.
         run: |
-          CHANGED=$(git diff --name-only --diff-filter=AM HEAD~1 -- 'docs/*.md' 'docs/*.html' | tr '\n' ' ')
-          DELETED=$(git diff --name-only --diff-filter=D HEAD~1 -- 'docs/*.md' 'docs/*.html' | tr '\n' ' ')
+          if git rev-parse --verify HEAD~1 >/dev/null 2>&1; then
+              CHANGED=$(git diff --name-only --diff-filter=AM HEAD~1 -- 'docs/**' | grep -E '\.(md|html)$' | tr '\n' ' ' || true)
+              DELETED=$(git diff --name-only --diff-filter=D HEAD~1 -- 'docs/**' | grep -E '\.(md|html)$' | tr '\n' ' ' || true)
+          else
+              echo "First commit: treating every doc as added."
+              CHANGED=$(git ls-files 'docs/**' | grep -E '\.(md|html)$' | tr '\n' ' ' || true)
+              DELETED=""
+          fi
           echo "changed=$CHANGED" >> "$GITHUB_OUTPUT"
           echo "deleted=$DELETED" >> "$GITHUB_OUTPUT"
           echo "Changed/added: $CHANGED"

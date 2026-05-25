@@ -7,11 +7,9 @@ Used by Claude to navigate long specs (the 4,800-line test plan, the
 3,000-line build guides) without grep-searching the body.
 """
 import logging
-import os
-
-import psycopg2
 
 from rag_core.relationships import to_bare, to_full
+from src.db import connection
 
 log = logging.getLogger(__name__)
 
@@ -32,23 +30,24 @@ def get_doc_outline(filename: str, max_level: int = 3) -> dict:
     `outline` is filtered to entries with `level <= max_level`. An empty
     list means the doc had no headers OR the indexer hasn't written its
     outline yet (the next reindex populates everything).
+
+    `max_level` is clamped to [1, 3]; values outside the range silently
+    snap to the closest valid level.
     """
+    max_level = max(1, min(int(max_level), 3))
     bare = to_bare(filename) if "/" in filename else filename
     if bare.endswith(".md"):
         bare = bare[:-3]
     full = to_full(bare)
 
     try:
-        conn = psycopg2.connect(os.environ["DATABASE_URL"])
-        try:
+        with connection() as conn:
             with conn.cursor() as cur:
                 cur.execute(
                     "SELECT outline FROM doc_outlines WHERE source_file = %s",
                     (full,),
                 )
                 row = cur.fetchone()
-        finally:
-            conn.close()
     except Exception as exc:
         log.error("get_doc_outline failed: %s", exc)
         return {"error": str(exc)}
