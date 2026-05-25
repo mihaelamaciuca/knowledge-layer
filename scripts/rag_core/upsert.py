@@ -1,8 +1,8 @@
 """SQL surface for doc_chunks upserts.
 
-v2 extended the column set to include the v2 authority/provenance/graph
-fields plus `tsv`. All v2 columns are nullable; callers that don't have
-the value pass None.
+The column set includes the authority, provenance, graph, and outline
+fields plus `tsv`. Those columns are nullable; callers that don't have
+a value pass None.
 
 `tsv` is computed by Postgres from `content` via `to_tsvector('english', ...)`
 at insert time, the caller never sends a tsvector value.
@@ -59,7 +59,7 @@ def upsert_chunk(cur, *, source_file: str, section_header: str,
                  also_touches: list[int] | None = None) -> None:
     """Single-row upsert. The caller manages the connection and the transaction.
 
-    v2 fields default to None / empty, callers that don't have them yet
+    extended fields default to None / empty, callers that don't have them yet
     (legacy code paths) keep working with the original arg shape.
     """
     cur.execute(UPSERT_SQL, (

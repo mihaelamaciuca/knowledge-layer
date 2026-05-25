@@ -59,11 +59,11 @@ jobs:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
         run: python3 scripts/verify_scrub.py
 
-      - name: Verify v2 fields
+      - name: Verify schema fields
         if: ${{ github.event.inputs.verify == 'true' }}
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
-        run: python3 scripts/verify_v2_fields.py
+        run: python3 scripts/verify_schema_fields.py
 
       - name: Build decision registry
         env:

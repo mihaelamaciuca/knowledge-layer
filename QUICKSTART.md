@@ -19,41 +19,15 @@ The init script asks for your project name and replaces all `{{PROJECT_NAME}}` p
 
 ### 2. Create the Supabase database
 
-1. Create a free Supabase project at [supabase.com](https://supabase.com)
-2. Enable the pgvector extension: go to SQL Editor and run:
-
-```sql
-CREATE EXTENSION IF NOT EXISTS vector;
-```
-
-3. Create the doc_chunks table:
-
-```sql
--- v1 base table
-CREATE TABLE doc_chunks (
-    id uuid DEFAULT gen_random_uuid() PRIMARY KEY,
-    source_file text NOT NULL,
-    section_header text,
-    area_number text,
-    doc_type text,
-    content text NOT NULL,
-    content_hash text NOT NULL UNIQUE,
-    embedding vector(1536),
-    updated_at timestamptz DEFAULT now()
-);
-
-CREATE INDEX ON doc_chunks USING ivfflat (embedding vector_cosine_ops) WITH (lists = 100);
-CREATE INDEX ON doc_chunks (source_file);
-CREATE INDEX ON doc_chunks (content_hash);
-```
-
-Then apply the v2 migration (adds authority + provenance + graph + outline columns and the four supporting tables):
+1. Create a free Supabase project at [supabase.com](https://supabase.com).
+2. Copy your connection string from Settings > Database > Connection string (URI format) into `DATABASE_URL`. If you are on IPv4, use the **Session Pooler** connection string instead of the direct connection.
+3. Apply the schema migration. It enables the `pgvector` extension, creates `doc_chunks` and the four supporting tables (`doc_outlines`, `doc_relationships`, `decisions`, `query_log`), adds the indexes, and enables Row Level Security on every table. One file, idempotent, safe to re-run:
 
 ```bash
-psql "$DATABASE_URL" -f scripts/migrations/001_kl_v2.sql
+psql "$DATABASE_URL" -f scripts/migrations/001_schema.sql
 ```
 
-The migration is idempotent, safe to re-run. It also enables Row Level Security on every new table (no policies, so the anon/authenticated PostgREST keys can't touch them; the service-role `DATABASE_URL` bypasses RLS).
+RLS is enabled with no policies, so anon/authenticated PostgREST keys can't read or write these tables; the service-role `DATABASE_URL` used by the indexer and the MCP server bypasses RLS.
 
 ### 3. Get an OpenAI API key
 

@@ -9,7 +9,7 @@ Two parsing functions:
     parse_frontmatter_v2(text)
         Returns (full_metadata_dict, body) where list-valued keys
         (depends-on, feeds-into, also-touches) are returned as Python
-        lists. Added for the v2 indexer columns.
+        lists. Added for the indexer columns.
 
 Both functions are line-based to keep the package dependency-free.
 """

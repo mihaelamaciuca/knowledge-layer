@@ -42,7 +42,7 @@ def _file_git_provenance(file_path: Path, repo_root: Path) -> tuple[str | None, 
     """Return (git_sha, git_committed_at_iso) for the file's last commit.
 
     Falls back to (None, None) if not in a git repo or the file is untracked.
-    Used to stamp v2 provenance on every chunk.
+    Used to stamp provenance on every chunk.
     """
     try:
         out = subprocess.run(

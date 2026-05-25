@@ -1,4 +1,4 @@
-"""Hybrid (vector + lexical) similarity search over doc_chunks v2.
+"""Hybrid (vector + lexical) similarity search over doc_chunks.
 
 Used by the FastMCP `search_docs` tool and the FastAPI `/search` endpoint.
 
@@ -152,9 +152,9 @@ def search_docs(
     include_superseded: bool = False,
     caller: str = "mcp",
 ) -> list[dict]:
-    """Hybrid vector+lexical search over the v2 index. Returns top-k rows.
+    """Hybrid vector+lexical search over the index. Returns top-k rows.
 
-    Each row dict contains all v2 columns plus computed `vec_sim`,
+    Each row dict contains all extended columns plus computed `vec_sim`,
     `lex_rank`, and `score`. Rows with `status='superseded'` are excluded
     unless `include_superseded=True`, in which case they are bannered.
     """

@@ -29,7 +29,7 @@ goldens:
 ```
 
 Notes:
-- `source_files` entries match against `source_file` as slug prefixes (so `02-dec-trial-length` matches both `02-dec-trial-length` and a v2 rename like `02-dec-trial-length-v2`). Use the most stable form you can.
+- `source_files` entries match against `source_file` as slug prefixes (so `02-dec-trial-length` matches both `02-dec-trial-length` and a versioned rename like `02-dec-trial-length-v2`). Use the most stable form you can.
 - `k` defaults to 10.
 - `filters` accepts `status`, `area`, `doc_type`, `include_superseded`, the same parameters `search_docs` exposes to the MCP layer.
 

@@ -3,7 +3,7 @@
 
 Scans docs/*-dec-*.md for a `decisions:` block in YAML frontmatter and
 upserts each entry into the `decisions` table
-(see migrations/001_kl_v2.sql).
+(see migrations/001_schema.sql).
 
 Expected shape in a decision document's frontmatter:
 

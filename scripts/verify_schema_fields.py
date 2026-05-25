@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Verify the v2 indexer fields are populated after a full reindex.
+"""Verify the indexer fields are populated after a full reindex.
 
 Three checks:
 
@@ -66,7 +66,7 @@ def main() -> int:
     print(f"Chunks with git_sha:               {with_sha} ({sha_fraction:.1%})")
     print(f"Chunks with git_committed_at:      {with_committed_at} ({committed_fraction:.1%})")
 
-    # ── 4. v2 field coverage (informational) ─────────────────────────────
+    # ── 4. field coverage (informational) ─────────────────────────────
     cur.execute("SELECT count(*) FROM doc_chunks WHERE status IS NOT NULL")
     (with_status,) = cur.fetchone()
     cur.execute("SELECT count(*) FROM doc_chunks WHERE doc_date IS NOT NULL")

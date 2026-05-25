@@ -11,8 +11,8 @@ Two utilities for the callers:
 The functions take an open cursor; the caller owns the connection and
 commit/rollback policy. Connection autocommit is the v1 default.
 
-v2 additions:
-    - v2 fields (status, supersedes, doc_date, depends_on, feeds_into,
+Extended fields:
+    - extended fields (status, supersedes, doc_date, depends_on, feeds_into,
       also_touches) extracted from frontmatter and stamped on every chunk.
     - Provenance (git_sha, git_committed_at) passed in by the caller and
       stamped on every chunk.
@@ -70,7 +70,7 @@ def delete_chunks_for_files(cur, source_files: list[str]) -> int:
     return chunks_deleted
 
 
-# ─── v2 helpers ──────────────────────────────────────────────────────────
+# ─── extended-field helpers ──────────────────────────────────────────────────────────
 
 def _normalise_scalar(value: str | None) -> str | None:
     """Convert YAML 'null' / empty strings to None."""
@@ -138,7 +138,7 @@ def _process_chunks(
     Three-pass pipeline:
         Pass 1: scrub + preamble + hash; drop chunks already indexed
         Pass 2: batch-embed the survivors in one OpenAI round-trip
-        Pass 3: upsert each with its embedding + v2 fields + provenance
+        Pass 3: upsert each with its embedding + extended fields + provenance
 
     Batching is the throughput win: 5,260 chunks at ~200ms per call become
     ~53 batched calls. Hash-based skip happens in pass 1 so we never pay
@@ -207,8 +207,8 @@ def _process_chunks(
     return upserted, skipped
 
 
-def _extract_v2_fields(metadata: dict) -> dict:
-    """Pull the v2 indexer columns out of parsed frontmatter."""
+def _extract_extended_fields(metadata: dict) -> dict:
+    """Pull the indexer columns out of parsed frontmatter."""
     area_number: int | None = None
     raw_area = metadata.get("area")
     if raw_area is not None:
@@ -253,7 +253,7 @@ def process_markdown_file(
     """
     text = file_path.read_text(encoding="utf-8")
     metadata, body = parse_frontmatter_v2(text)
-    v2 = _extract_v2_fields(metadata)
+    extended = _extract_extended_fields(metadata)
 
     chunks = chunk_by_h2(body)
     if not chunks:
@@ -270,7 +270,7 @@ def process_markdown_file(
         git_committed_at=git_committed_at,
         openai_client=openai_client,
         existing_hashes=existing_hashes,
-        **v2,
+        **extended,
     )
 
     # Refresh the doc_relationships rows for this file. Replace-on-write
@@ -303,7 +303,7 @@ def process_html_file(
 
     Same contract as process_markdown_file. Returns (upserted, skipped).
 
-    HTML trackers don't have YAML frontmatter, so the v2 fields default
+    HTML trackers don't have YAML frontmatter, so the extended fields default
     to None / empty. doc_type is derived from filename by the HTML parser.
     """
     html_text = file_path.read_text(encoding="utf-8")
