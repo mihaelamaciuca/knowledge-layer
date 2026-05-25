@@ -1,0 +1,30 @@
+# Goldens for the retrieval eval harness, see evals/README.md.
+#
+# Add one entry per query. Each entry asserts that every file listed under
+# `expect.source_files` appears in `search_docs(query, k)`'s top-k results.
+# Filenames are matched as slug prefixes (without `.md`) so entries survive
+# minor renames.
+#
+# Example (commented out, uncomment and adapt to your corpus):
+#
+# goldens:
+#   - id: trial-length-current-value
+#     query: "What is the current free trial length?"
+#     k: 5
+#     expect:
+#       source_files:
+#         - 02-dec-trial-length
+#       # Optional, assert the top hit's status is one of these.
+#       top_status: [complete]
+#     # Optional, filters passed to search_docs.
+#     filters:
+#       status: complete
+#
+#   - id: stack-decision
+#     query: "Which database are we using?"
+#     k: 3
+#     expect:
+#       source_files:
+#         - 03-dec-tech-stack
+
+goldens: []

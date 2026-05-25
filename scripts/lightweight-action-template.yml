@@ -1,0 +1,208 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# RAG Sync. Lightweight Template for Code Repos
+# ─────────────────────────────────────────────────────────────────────────────
+# Setup:
+#   1. Copy this file to .github/workflows/sync-to-rag.yml in your repo.
+#   2. Replace every occurrence of REPO_NAME below with the actual repo name
+#      (e.g. "myapp-api").
+#   3. Add GitHub Actions secrets to the repo:
+#        DATABASE_URL
+#        OPENAI_API_KEY
+# ─────────────────────────────────────────────────────────────────────────────
+
+name: Sync docs to RAG index
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "docs/track-b-*-log.md"
+      - "docs/CLAUDE.md"
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+
+      - name: Identify changed docs
+        id: diff
+        run: |
+          CHANGED=$(git diff --name-only --diff-filter=AM HEAD~1 -- 'docs/track-b-*-log.md' 'docs/CLAUDE.md' | tr '\n' ' ')
+          DELETED=$(git diff --name-only --diff-filter=D HEAD~1 -- 'docs/track-b-*-log.md' 'docs/CLAUDE.md' | tr '\n' ' ')
+          echo "changed=$CHANGED" >> "$GITHUB_OUTPUT"
+          echo "deleted=$DELETED" >> "$GITHUB_OUTPUT"
+          echo "Changed/added: $CHANGED"
+          echo "Deleted: $DELETED"
+
+      - name: Set up Python
+        if: steps.diff.outputs.changed != '' || steps.diff.outputs.deleted != ''
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        if: steps.diff.outputs.changed != '' || steps.diff.outputs.deleted != ''
+        run: pip install psycopg2-binary openai
+
+      - name: Upsert changed chunks
+        if: steps.diff.outputs.changed != ''
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: |
+          python3 - "${{ steps.diff.outputs.changed }}" <<'PYEOF'
+          import hashlib, os, re, sys, time
+          from pathlib import Path
+
+          import psycopg2
+          from openai import OpenAI
+
+          EMBEDDING_MODEL = "text-embedding-3-small"
+          EMBEDDING_DIMENSIONS = 1536
+          EMBED_DELAY = 0.1
+          MAX_CHUNK_CHARS = 4000
+
+          def parse_frontmatter(text):
+              metadata = {}
+              body = text
+              m = re.match(r"^---\s*\n(.*?)\n---\s*\n", text, re.DOTALL)
+              if not m:
+                  return metadata, body
+              for line in m.group(1).splitlines():
+                  if line.strip().startswith("- "):
+                      continue
+                  kv = line.split(":", 1)
+                  if len(kv) == 2:
+                      metadata[kv[0].strip()] = kv[1].strip()
+              return metadata, text[m.end():]
+
+          def _split_by_heading(body, prefix):
+              chunks, hdr, lines = [], "(intro)", []
+              for line in body.splitlines():
+                  if line.startswith(prefix) and not line.startswith(prefix + "#"):
+                      content = "\n".join(lines).strip()
+                      if content:
+                          chunks.append((hdr, content))
+                      hdr = line.lstrip("# ").strip()
+                      lines = []
+                  else:
+                      lines.append(line)
+              content = "\n".join(lines).strip()
+              if content:
+                  chunks.append((hdr, content))
+              return chunks
+
+          def _split_by_size(header, text):
+              pieces = []
+              for i in range(0, len(text), MAX_CHUNK_CHARS):
+                  part = text[i:i + MAX_CHUNK_CHARS].strip()
+                  if part:
+                      suffix = f" (part {len(pieces)+1})" if len(text) > MAX_CHUNK_CHARS else ""
+                      pieces.append((header + suffix, part))
+              return pieces
+
+          def chunk_by_h2(body):
+              final = []
+              for hdr, content in _split_by_heading(body, "## "):
+                  if len(content) <= MAX_CHUNK_CHARS:
+                      final.append((hdr, content))
+                      continue
+                  for h3hdr, h3content in _split_by_heading(content, "### "):
+                      sub = f"{hdr} > {h3hdr}" if h3hdr != "(intro)" else hdr
+                      if len(h3content) <= MAX_CHUNK_CHARS:
+                          final.append((sub, h3content))
+                      else:
+                          final.extend(_split_by_size(sub, h3content))
+              return final
+
+          # Replace REPO_NAME with the actual repository name
+          REPO_NAME = "REPO_NAME"
+
+          files = sys.argv[1].split()
+          conn = psycopg2.connect(os.environ["DATABASE_URL"])
+          conn.autocommit = True
+          cur = conn.cursor()
+          client = OpenAI(api_key=os.environ["OPENAI_API_KEY"])
+
+          UPSERT_SQL = """
+          INSERT INTO doc_chunks (source_file, section_header, area_number, doc_type,
+                                  content, content_hash, embedding)
+          VALUES (%s, %s, %s, %s, %s, %s, %s::vector)
+          ON CONFLICT (content_hash) DO UPDATE SET
+              source_file    = EXCLUDED.source_file,
+              section_header = EXCLUDED.section_header,
+              area_number    = EXCLUDED.area_number,
+              doc_type       = EXCLUDED.doc_type,
+              content        = EXCLUDED.content,
+              embedding      = EXCLUDED.embedding;
+          """
+
+          total = 0
+          for filepath in files:
+              p = Path(filepath)
+              if not p.exists():
+                  continue
+              source_file = f"{REPO_NAME}/{filepath}"
+              text = p.read_text(encoding="utf-8")
+              metadata, body = parse_frontmatter(text)
+
+              area_number = None
+              raw = metadata.get("area")
+              if raw:
+                  try:
+                      area_number = int(raw)
+                  except (ValueError, TypeError):
+                      pass
+              doc_type = metadata.get("type") or None
+
+              cur.execute("DELETE FROM doc_chunks WHERE source_file = %s", (source_file,))
+
+              for hdr, content in chunk_by_h2(body):
+                  content_hash = hashlib.sha256(content.encode()).hexdigest()
+                  resp = client.embeddings.create(
+                      model=EMBEDDING_MODEL, input=content, dimensions=EMBEDDING_DIMENSIONS
+                  )
+                  emb = "[" + ",".join(str(x) for x in resp.data[0].embedding) + "]"
+                  cur.execute(UPSERT_SQL, (
+                      source_file, hdr, area_number, doc_type,
+                      content, content_hash, emb,
+                  ))
+                  total += 1
+                  time.sleep(EMBED_DELAY)
+
+              print(f"  {filepath}: upserted")
+
+          cur.close()
+          conn.close()
+          print(f"Total chunks upserted: {total}")
+          PYEOF
+
+      - name: Delete chunks for removed files
+        if: steps.diff.outputs.deleted != ''
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: |
+          python3 - "${{ steps.diff.outputs.deleted }}" <<'PYEOF'
+          import os, sys
+          import psycopg2
+
+          # Replace REPO_NAME with the actual repository name
+          REPO_NAME = "REPO_NAME"
+
+          files = sys.argv[1].split()
+          conn = psycopg2.connect(os.environ["DATABASE_URL"])
+          conn.autocommit = True
+          cur = conn.cursor()
+
+          for filepath in files:
+              source_file = f"{REPO_NAME}/{filepath}"
+              cur.execute("DELETE FROM doc_chunks WHERE source_file = %s", (source_file,))
+              print(f"  Deleted chunks for {source_file}")
+
+          cur.close()
+          conn.close()
+          PYEOF

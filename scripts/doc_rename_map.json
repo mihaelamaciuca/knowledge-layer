@@ -1,0 +1,7 @@
+{
+  "description": "Rename map for fixing dangling depends-on and feeds-into references in docs/. Applied by scripts/audit_docs_standards.py --fix. Sections: 'renames' = global old->new slug (without .md); 'per_file_renames' = scoped {filename.md: {old: new}}; 'area_redirects' = legacy area refs -> 'area-N-name'; 'delete_refs' = literal strings that should be removed entirely. Start empty; add entries as renames happen.",
+  "renames": {},
+  "per_file_renames": {},
+  "area_redirects": {},
+  "delete_refs": []
+}

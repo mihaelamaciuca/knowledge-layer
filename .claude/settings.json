@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "{{PROJECT_NAME}}-docs": {
+      "type": "http",
+      "url": "https://YOUR_RAILWAY_URL.up.railway.app/mcp",
+      "headers": {
+        "Authorization": "Bearer YOUR_MCP_TOKEN_HERE"
+      }
+    }
+  }
+}

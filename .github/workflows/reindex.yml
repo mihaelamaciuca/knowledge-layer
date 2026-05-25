@@ -1,0 +1,71 @@
+# Manually-triggered full reindex of doc_chunks against the live Supabase
+# pgvector index. Runs scripts/populate.py with --full-reindex, then
+# scripts/verify_scrub.py to confirm the governance scrub left no
+# unscrubbed excluded-field patterns.
+#
+# Use this after:
+#   - A schema migration changes how chunks are stored
+#   - The scrub policy changes (rag_core/scrub.py)
+#   - Bulk frontmatter changes affect indexed fields
+#   - Any drift between the live index and main.
+
+name: Full reindex docs to RAG
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: 'Type REINDEX to confirm, this DELETEs all chunks and re-embeds every doc. Runtime scales with corpus size.'
+        required: true
+        type: string
+      verify:
+        description: 'Run the scrub verification after reindex (recommended)'
+        required: false
+        type: boolean
+        default: true
+
+jobs:
+  reindex:
+    runs-on: ubuntu-latest
+    # Runtime scales linearly with chunk count: each chunk costs one OpenAI
+    # embed call with a 100ms throttle. Raise timeout-minutes if your corpus
+    # outgrows the default.
+    timeout-minutes: 60
+    steps:
+      - name: Confirm trigger
+        if: github.event.inputs.confirm != 'REINDEX'
+        run: |
+          echo "::error::Confirmation not provided. Type 'REINDEX' in the input field to proceed."
+          exit 1
+
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: pip install psycopg2-binary openai python-dotenv pyyaml
+
+      - name: Full reindex
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: python3 scripts/populate.py --docs-dir docs --full-reindex
+
+      - name: Verify scrub
+        if: ${{ github.event.inputs.verify == 'true' }}
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: python3 scripts/verify_scrub.py
+
+      - name: Verify v2 fields
+        if: ${{ github.event.inputs.verify == 'true' }}
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: python3 scripts/verify_v2_fields.py
+
+      - name: Build decision registry
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: python3 scripts/build_decision_registry.py
