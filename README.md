@@ -1,4 +1,4 @@
-# Knowledge Layer for AI-native teams
+# Knowledge layer for AI-native teams
 
 > Your team's memory, made queryable by both humans and agents. A write-first methodology, a reference implementation, and a forkable starting point.
 
