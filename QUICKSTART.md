@@ -122,104 +122,45 @@ Once you have docs flowing through the system: `get_drift_report(top=10)` return
 
 ---
 
-## Phase 1: Foundation Documents
+## Phase 1: Write your first documents
 
-Write these documents first, in this order. Use the templates in `docs/TEMPLATES/`.
+### What's required vs what's yours
 
-### 1. Vision and Mission (`01-str-vision-mission.md`)
-What does the world look like if your product succeeds? What is the product's job? Keep it to one page. This is the document everything else aligns to.
+Only one document is load-bearing for the system: **`docs/00-pol-document-standards.md`**. The audit script (`scripts/audit_docs_standards.py`) enforces its rules on every PR. Open it and customize:
 
-### 2. User Personas (`02-res-personas.md`)
-Who are your users? What do they need? What frustrates them? Research-type document, state your confidence levels and what you're assuming vs. what you've validated.
+- **Capability areas.** The shipped table lists generic areas (Strategy, Product, Engineering, Data, etc.). Replace with the areas that actually divide *your* project.
+- **Document types.** The six types (`spec`, `res`, `str`, `dec`, `pol`, `fwk`) are the controlled vocabulary `audit_docs_standards.py` validates against. Don't add or remove without also updating `VALID_TYPES` in the audit script.
+- **Frontmatter fields.** The audit script's `REQUIRED_FIELDS` matches this doc's "Required: Yes" rows. Keep them in sync.
 
-### 3. Risk Appetite (`01-str-risk-appetite.md`)
-What are your hard stops? What risks are you willing to take? Distinguish between structural limitations and non-negotiable constraints. This shapes every decision that follows.
+Two other shipped docs are useful but optional:
 
-### 4. Document Standards (`00-pol-document-standards.md`)
-Already included in this template. Review it, customize the capability areas for your product.
+- `docs/00-fwk-doc-hygiene-loop.md` defines the weekly 15-minute maintenance cadence. The drift detector works without it; the process doc is what tells humans how to use the drift detector.
+- `docs/00-fwk-project-tracker.md` and `docs/00-fwk-open-gaps.md` are empty skeletons for tracking deliverables and unresolved questions. Keep, customize, or delete.
 
-### 5. Assumptions Register (`01-fwk-assumptions-register.md`)
-Every assumption you're making, about users, market, technology, regulations. Each with a confidence level and a testable signal that would invalidate it.
+Everything else under `docs/` is yours to write.
 
-After writing each document, push to main. The GitHub Action will sync them to the vector index. Verify with a search in Claude Code.
+### Scaffolds
 
----
+`docs/TEMPLATES/` ships six scaffolds, one per doc type. Copy a template, rename to `[area]-[type]-[name].md`, fill it in. The TEMPLATES files are not part of the indexed corpus; they exist to be copied.
 
-## Phase 2: Research
+### Examples of a starter document
 
-Now research the spaces your product operates in. Write research documents (`res` type) for:
+The right first document depends on what your project is. Here are three shapes:
 
-- **Competitive landscape**, who else is building in this space, what they do well, where they fall short
-- **Domain research**, the subject matter your product deals with (psychology, finance, education, etc.)
-- **Regulatory analysis**, what laws and regulations apply (GDPR, COPPA, HIPAA, PCI-DSS, etc.)
-- **Technology evaluation**, which frameworks, services, and tools to consider for each component
-- **User behaviour**, how your target users currently solve the problem
+- **A SaaS or product team:** start with a *decision* (e.g. `02-dec-tech-stack.md`) recording the stack you're committing to. The decision has natural `cross_refs` to other docs you'll write later, so the dependency graph grows from a real anchor.
+- **An open-source library or service:** start with a *spec* (e.g. `03-spec-public-api.md`) documenting your public API contract. Future spec changes cascade through `get_impact_targets` once you have downstream specs.
+- **A research project or knowledge base:** start with a *research* doc (e.g. `02-res-prior-art.md`) summarising the literature. Decisions and specs you write later can cite it via `depends-on`.
 
-Each research document should explicitly state:
-- Confidence levels (high/medium/low) for each finding
-- Known gaps, what you haven't been able to validate yet
-- Sources and methodology
+In every case: write the doc with valid frontmatter, push to main, watch `sync-to-rag.yml` index it, then call `search_docs("<your doc's title>")` from Claude Code. If the doc comes back with provenance, the layer is working. Now write the second.
 
----
+### The doc-hygiene loop
 
-## Phase 3: Decisions
+Once the corpus has anything in it: `get_drift_report(top=10)` returns a prioritised queue of flagged claims. 15 minutes a week to triage. See `docs/00-fwk-doc-hygiene-loop.md` for the full process.
 
-Research feeds decisions. Write decision documents (`dec` type) for:
+### Evals (optional but recommended)
 
-- **Stack decisions**, language, framework, database, hosting, CI/CD
-- **Architecture decisions**, monolith vs microservices, API style, auth approach
-- **Compliance approach**, how you'll meet regulatory requirements
-- **Data handling**, what you collect, where you store it, how long you keep it
-- **AI strategy**, which models, what they do, how they're governed
+Once you have a handful of docs, populate `evals/goldens.yaml` with the questions you most often ask the layer and the docs you expect back. `python3 evals/run_evals.py` measures Hit@k, Recall@k, MRR, and top-status precision (see `evals/README.md`). The harness is a no-op until you add goldens; once you do, run it locally before any change to the chunker, the embedder, or the scrub.
 
-Each decision document must include:
-- What you chose
-- What you rejected and why
-- What conditions would trigger a change
-- Who signed off
+### The constraint sheet (`CLAUDE.md`)
 
----
-
-## Phase 4: Specifications
-
-Decisions constrain specs. For each service or component, write:
-
-1. **Definition** (`spec`), what the service is, inputs, outputs, modes, constraints
-2. **Architecture** (`spec`), package layout, workflow steps, database schema
-3. **API contract** (`spec`), every endpoint with method, path, request/response shape, auth, error codes
-4. **Test plan** (`spec`), every test case with unique ID, category, inputs, expected outputs, pass/fail criteria
-5. **Build guides** (`spec`), session-by-session Claude Code prompts with prerequisites, file paths, code blocks, pass criteria
-
-Build guides are where Claude writes the code blocks during spec creation. You select, validate, and constrain them.
-
----
-
-## Phase 5: Build
-
-### Set up the constraint sheet
-
-The repo's root `CLAUDE.md` is the file Claude Code reads at the start of every session in this codebase. Populate it with:
-- Stack and package layout
-- Import rules and architectural boundaries
-- Field exclusion rules (data that must never be logged or returned)
-- Query scoping requirements (tenant isolation)
-- SQL rules (parameterized queries, ownership WHERE clauses)
-- CI pipeline steps
-- Commit message format
-- Build session references
-
-### Run build sessions
-
-Each session is atomic: read scope from the build guide, run the Claude Code prompt, run CI gates, review the output, fix findings, audit the spec against the implementation, commit, update the tracker. Don't start session N+1 until session N passes all criteria. The exact review steps and personas are project-specific, define them in your own build-guide template.
-
----
-
-## Ongoing: The Feedback Loop
-
-After every build session:
-1. **Update the constraint sheet** with any new invariants discovered
-2. **Run the spec audit**, classify every difference between guide and implementation
-3. **Update the tracker**, mark completed items, add new gaps
-4. **Push to main**. GitHub Action syncs everything to the index
-
-The system gets stronger with every session. Corrections become permanent. The constraint sheet grows. The index stays current. Every new session starts with full context.
+The repo's root `CLAUDE.md` is what Claude Code reads at the start of every session in this codebase. It ships as a skeleton of commented-out prompts. Fill in only the sections relevant to your project: stack and package layout, import rules, field-exclusion rules (the same fields you add to `rag_core/scrub.py`), and whatever invariants you want Claude to honour without being reminded.
