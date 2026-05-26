@@ -4,7 +4,7 @@
 [![Audit doc standards](https://github.com/mihaelamaciuca/knowledge-layer/actions/workflows/audit-docs.yml/badge.svg)](https://github.com/mihaelamaciuca/knowledge-layer/actions/workflows/audit-docs.yml)
 [![Python 3.12+](https://img.shields.io/badge/python-3.12+-blue.svg)](https://www.python.org/downloads/)
 
-**[ARCHITECTURE](ARCHITECTURE.md)** · **[QUICKSTART](QUICKSTART.md)** · **[CONTRIBUTING](CONTRIBUTING.md)** · **[methodology](methodology.md)** · **[Writing guide](docs/00-fwk-writing-guide.md)**
+**[Architecture](ARCHITECTURE.md)** · **[Quickstart](QUICKSTART.md)** · **[Contributing](CONTRIBUTING.md)** · **[Methodology](methodology.md)** · **[Writing guide](docs/00-fwk-writing-guide.md)**
 
 > Your team's memory, made queryable by both humans and agents. A write-first methodology, a reference implementation, and a forkable starting point.
 
