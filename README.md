@@ -41,7 +41,7 @@ This repository is one concrete embodiment of that direction.
 
 ## What this repository is
 
-A single tree holding three things:
+A single tree holding four things:
 
 1. **The corpus.** A `docs/` directory of markdown documents (specs, decisions, policies, frameworks, strategies, research notes), each with YAML frontmatter declaring its identity, lifecycle state, and dependency edges. The corpus is the source of truth. If a fact is not in the corpus, the system does not know it. This repository ships document **standards** and **templates**, not your corpus content. That part is yours.
 
