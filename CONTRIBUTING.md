@@ -28,7 +28,7 @@ Out of scope for upstream:
 
 **Pull requests.** Small, focused, one logical change per PR. Larger changes start as an issue so the scope can be agreed before the work.
 
-**Forks with public riffs.** If you forked and published your version (with your own corpus or your own variant of the template), open an issue with a link. Visibility helps other forkers see what's been tried.
+**Forks.** If you forked and published your version, open an issue with a link to your fork so other readers can see what's been tried.
 
 ## Before you open a PR
 

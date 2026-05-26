@@ -4,6 +4,8 @@
 [![Audit doc standards](https://github.com/mihaelamaciuca/knowledge-layer/actions/workflows/audit-docs.yml/badge.svg)](https://github.com/mihaelamaciuca/knowledge-layer/actions/workflows/audit-docs.yml)
 [![Python 3.12+](https://img.shields.io/badge/python-3.12+-blue.svg)](https://www.python.org/downloads/)
 
+**[ARCHITECTURE](ARCHITECTURE.md)** · **[QUICKSTART](QUICKSTART.md)** · **[CONTRIBUTING](CONTRIBUTING.md)** · **[methodology](methodology.md)** · **[Writing guide](docs/00-fwk-writing-guide.md)**
+
 > Your team's memory, made queryable by both humans and agents. A write-first methodology, a reference implementation, and a forkable starting point.
 
 A *knowledge layer* is a single, agent-readable substrate that underlies product, engineering, design, and operations work. It serves two populations through the same interface: the humans on the team (who write the documents and read them back), and the agents that execute work on the team's behalf (Claude Code, Claude.ai, or any other MCP-aware client). Both ask the same questions of the same store; both get the same answers, grounded in the team's settled truth rather than in training data, the public web, or the last few messages in a chat window.
@@ -31,9 +33,7 @@ flowchart LR
 
 For roughly two years, the dominant pattern for connecting an LLM to a team's own knowledge has been *retrieval-augmented generation*: embed documents into a vector store, fetch the top-k chunks at query time, stuff them into the prompt. RAG is fine for a chatbot answering questions over a static FAQ. It is a poor foundation for AI agents executing real work.
 
-Several independent threads have converged on the same diagnosis. Nate Jones [[1]](#citations) argued that classic RAG breaks down once agents start doing real work, and proposed a *knowledge layer* (a system that knows which fact is current, which is superseded, which depends on which, and which to surface for a given task) as the next architectural step. Pinecone [[2]](#citations), with the launch of Nexus and KnowQL in May 2026, reframed retrieval as a *knowledge engine for agents*. Microsoft Research's GraphRAG [[3]](#citations) showed that adding an explicit graph over documents addresses the "connecting the dots" weakness of baseline RAG. VectifyAI's PageIndex [[4]](#citations) argued for preserving document structure rather than flattening into uniform fixed-size chunks. Harrison Chase's *The Rise of Context Engineering* [[5]](#citations) named the discipline of curating what gets put in front of the model as the central skill an AI engineer develops.
-
-A practitioner-side thread reaches the same place from the bottom up. Barnett et al.'s *Seven Failure Points* [[6]](#citations) concluded that the robustness of a RAG system evolves rather than is designed-in at the start. Ru et al.'s *RAGChecker* [[7]](#citations) (NeurIPS 2024) defined fine-grained diagnostic metrics (claim recall, context precision, hallucination, faithfulness) that turn operational validation into a measurable, repeatable activity. Together they establish: a serious knowledge layer cannot be designed-in once. It must come with its own diagnostic loop.
+A cluster of recent work converges on the same diagnosis. Nate Jones [[1]](#citations) and Pinecone [[2]](#citations) reframe retrieval for agents as a *knowledge layer* or *knowledge engine* with first-class authority and supersession. Microsoft's GraphRAG [[3]](#citations) adds an entity-and-relationship graph over the corpus to address cross-document "connecting the dots" weakness; VectifyAI's PageIndex [[4]](#citations) preserves the intra-document section structure that uniform chunking destroys. Harrison Chase [[5]](#citations) names context engineering as the central skill. Barnett et al.'s *Seven Failure Points* [[6]](#citations) and Ru et al.'s *RAGChecker* [[7]](#citations) add the operational discipline (failure taxonomies, diagnostic metrics); AWS's prescriptive guidance for RAG documentation [[8]](#citations) adds the writing-side conventions. Together they establish that a serious knowledge layer cannot be designed-in once: it needs its own diagnostic loop and its own writing rules.
 
 This repository is one concrete embodiment of that direction.
 
@@ -49,6 +49,8 @@ A single tree holding three things:
 
 3. **The MCP server.** A `src/` FastAPI application that exposes seven tools over the MCP Streamable HTTP transport. Any MCP-aware client (Claude Code, Claude.ai, or other agents) connects and calls the tools. Humans access the same corpus directly through the doc files on disk and through any docs site built on top of them.
 
+4. **Worked examples.** At least one end-to-end example per doc type under `docs/`: `01-str-knowledge-strategy.md` (strategy), `02-spec-onboarding-flow.md` and `03-spec-search-api.md` (spec), `03-dec-tech-stack.md` (decision), `03-res-vector-stores.md` (research), `05-pol-data-retention.md` (policy), and the framework docs at `docs/00-fwk-*.md`. Plus `examples/CLAUDE.example.md` (a populated `CLAUDE.md` skeleton) and `examples/sample-docs/` (a before/after pair showing the writing rules applied).
+
 The corpus, the indexer, and the server live in the same repository on purpose. Documents, the code that indexes them, and the code that serves them evolve together. One tree, one history, one PR.
 
 ```mermaid
@@ -62,9 +64,9 @@ flowchart LR
 
     docs -->|git push| ci
     ci -->|chunk + scrub + embed| db
-    db --> mcp
+    mcp -->|SQL queries| db
     mcp -->|7 MCP tools| agents
-    mcp -->|/search REST| humans
+    humans -->|POST /search + bearer| mcp
     docs -->|read on disk| humans
 
     classDef store fill:#fef3c7,stroke:#92400e,color:#7c2d12;
@@ -180,6 +182,8 @@ flowchart TD
 This is not a chatbot. It is not a "talk to your docs" interface bolted onto a Notion export. It is not a vector store with a search box. It is not a workflow engine, a CMS, or a wiki replacement.
 
 It is not "fully agentic" in any breathless sense of the word. Most maintenance operations (the weekly hygiene triage, the full re-index, the resolution of drift flags) are triggered by a human. The agents do the writing, the searching, and the impact reasoning. The human does the deciding. That balance is the point.
+
+The template has been operated by a one- or two-person team; multi-team forks are untested.
 
 It is a pattern, an opinion, and a working reference implementation that any team can fork.
 
