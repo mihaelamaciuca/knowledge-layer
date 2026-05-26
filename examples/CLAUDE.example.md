@@ -119,7 +119,7 @@ Adding a lock: pick the next free number, document the job here in the same PR.
 ## OpenAPI / API spec sync
 
 - `api/openapi.yaml` is the source of truth for the public HTTP surface.
-- The spec update and the code change must land in the same session.
+- The spec update and the code change must be merged in the same session.
 - A handler whose responses diverge from the spec is a defect; the spec-vs-route check in CI flags it.
 
 ---
@@ -142,7 +142,7 @@ At the end of every session, update `docs/track-build-log.md` in the docs repo w
 
 - What was built (one line per spec or build-guide section completed)
 - Any deviations from the spec, or an explicit statement of none
-- Decisions made during the session that should land as a `*-dec-*.md` document
+- Decisions made during the session that should be recorded as a `*-dec-*.md` document
 - Bugs found and how they were resolved
 - What the next session should start with
 

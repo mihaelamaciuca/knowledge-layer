@@ -6,7 +6,7 @@
 
 > Your team's memory, made queryable by both humans and agents. A write-first methodology, a reference implementation, and a forkable starting point.
 
-A *knowledge layer* is a single, agent-readable substrate that sits beneath product, engineering, design, and operations work. It serves two populations through the same interface: the humans on the team (who write the documents and read them back), and the agents that execute work on the team's behalf (Claude Code, Claude.ai, or any other MCP-aware client). Both ask the same questions of the same store; both get the same answers, grounded in the team's settled truth rather than in training data, the public web, or the last few messages in a chat window.
+A *knowledge layer* is a single, agent-readable substrate that underlies product, engineering, design, and operations work. It serves two populations through the same interface: the humans on the team (who write the documents and read them back), and the agents that execute work on the team's behalf (Claude Code, Claude.ai, or any other MCP-aware client). Both ask the same questions of the same store; both get the same answers, grounded in the team's settled truth rather than in training data, the public web, or the last few messages in a chat window.
 
 The methodology that produces the substrate is **write-first**: every spec, decision, and policy is written down before it is acted on. The layer is the artefact that makes those writings useful to machines as well as to people.
 

@@ -21,7 +21,7 @@ also-touches: [3]
 
 A successful onboarding produces an account in `status='active'` with a verified email, a workspace, and at least one resource row (placeholder permitted), in under five screens.
 
-The success metric is the share of users who, within 10 minutes of landing on the signup page, reach the post-onboarding dashboard with at least one resource row attached to their workspace. Pre-launch target: 60%. Below 40% triggers a flow review.
+The success metric is the share of users who, within 10 minutes of arriving at the signup page, reach the post-onboarding dashboard with at least one resource row attached to their workspace. Pre-launch target: 60%. Below 40% triggers a flow review.
 
 ## Flow overview, the five screens in order
 
@@ -107,9 +107,9 @@ Abandonment behaviour by screen: pre-account screens leave no trace; post-accoun
 |-----------------------|-------------------|------------------|
 | 1 (email entered) | None (OTP cached server-side, 10-minute TTL) | Re-entering the email resends an OTP if the previous one expired |
 | 2 (OTP verified) | None (verification cached server-side, 30-minute TTL) | Re-entering the email skips OTP if cache hit; otherwise re-verifies |
-| 3 (password set) | Account row, `status='pending'`, no workspace | Login lands on screen 4 |
-| 4 (workspace created) | Account + workspace, `status='pending'` | Login lands on screen 5 |
-| 5 (first resource) | Account active | Login lands on dashboard |
+| 3 (password set) | Account row, `status='pending'`, no workspace | Login resumes at screen 4 |
+| 4 (workspace created) | Account + workspace, `status='pending'` | Login resumes at screen 5 |
+| 5 (first resource) | Account active | Login resumes at the dashboard |
 
 Accounts stuck at `status='pending'` for more than 7 days are notified by email. After 30 days the row is deleted by an abandoned-signup sweep. This is a product-spec retention rule, not the user-initiated deletion path: Rule 1 of `docs/05-pol-data-retention.md` explicitly says "purge inactive accounts after N months belongs in the product spec, not this policy", which is the territory this rule occupies.
 

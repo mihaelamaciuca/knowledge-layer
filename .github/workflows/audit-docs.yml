@@ -31,7 +31,7 @@ jobs:
               print('Could not parse violation count'); sys.exit(1)
           count = int(m.group(1))
           # The standing target is 0. Raise 'allowed' temporarily only when a
-          # known, tracked exception lands; lower it back as exceptions close.
+          # known, tracked exception is added; lower it back as exceptions close.
           allowed = 0
           if count > allowed:
               print(f'FAIL: {count} violations (allowed: {allowed})')

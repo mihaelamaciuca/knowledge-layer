@@ -113,7 +113,7 @@ Examples:
 
 <!-- If you have an API spec (OpenAPI, GraphQL schema, etc.):
 - The spec is the source of truth.
-- The spec update and the code change must land in the same session.
+- The spec update and the code change must be merged in the same session.
 - A handler that diverges from the spec is a defect.
 -->
 

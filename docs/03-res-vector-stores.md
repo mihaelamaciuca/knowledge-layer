@@ -33,7 +33,7 @@ Trade-off: ivfflat recall is sensitive to the `lists` parameter and degrades on 
 
 **Confidence: High.** Best-in-class recall, hybrid search out of the box, generous free tiers. Operationally a single API call to upsert; nothing to provision.
 
-Trade-off: metadata lives in two stores (your Postgres + their index). Every search response that needs authority or provenance needs a follow-up SQL roundtrip. Cost ramps with QPS and storage; small projects can sit comfortably under free-tier limits.
+Trade-off: metadata lives in two stores (your Postgres + their index). Every search response that needs authority or provenance needs a follow-up SQL roundtrip. Cost ramps with QPS and storage; small projects can fit comfortably within free-tier limits.
 
 ## Finding 3: Self-hosted (Qdrant, Milvus)
 

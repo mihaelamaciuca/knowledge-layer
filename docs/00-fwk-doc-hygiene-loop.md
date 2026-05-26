@@ -69,7 +69,7 @@ Highest priority. If a chunk mentions decision topic X but doesn't mention the c
 
 Queue size, week over week. The first few loops typically clear most of the initial backlog as patterns get tuned and dangling refs get fixed. After that, the queue stays small: a handful of items per week, all from the most recent docs touched.
 
-If the queue grows for 3 consecutive weeks, increase the cadence to twice-weekly OR investigate WHY drift is accelerating (often: a slice of new specs landing without dependency updates).
+If the queue grows for 3 consecutive weeks, increase the cadence to twice-weekly OR investigate WHY drift is accelerating (often: a slice of new specs being merged without dependency updates).
 
 ## Logging
 
