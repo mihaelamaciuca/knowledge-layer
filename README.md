@@ -77,6 +77,43 @@ flowchart LR
 
 ---
 
+## Deployment
+
+Five pieces in total. Three backend services and two static frontends.
+
+**Backend services**
+
+- **The MCP server.** A FastAPI application exposing seven tools over the MCP Streamable HTTP transport. Authenticated via bearer tokens. Deployable to any platform that runs Python.
+- **A Postgres + pgvector database.** Holds the indexed chunks, the dependency graph, the decisions registry, and a query log. Read path for the MCP server, write path for the indexer.
+- **An embedding provider.** The reference template uses OpenAI `text-embedding-3-small` at 1536 dimensions; the indexer is provider-agnostic and any embedding API works.
+
+**Static frontends (auth-gated)**
+
+- **A docs site.** The corpus rendered as a wiki-style human-readable site. Use any static-site generator (Hugo, MkDocs, MdBook, Docusaurus, Nextra) and any static host (Cloudflare Pages, Netlify, Vercel, GitHub Pages). Built on every push from the same corpus the MCP server reads.
+- **A graph view.** An interactive visualization of the dependency graph (nodes coloured by doc type, edges by relation). Built at deploy time from the same database the MCP server queries. Useful for spotting clusters, orphans, and unexpected dependencies.
+
+The MCP server is the only piece agents talk to directly. The two static frontends exist for humans.
+
+---
+
+## The corpus and its standards
+
+The corpus is the foundation. Everything else exists to serve it.
+
+Each document is a single markdown file with YAML frontmatter at the top. The frontmatter is parsed by the indexer, validated by an audit script on every PR, and used to build the dependency graph. The standards are defined in `docs/00-pol-document-standards.md`:
+
+- **Filename convention.** `<area>-<type>-<slug>.md`. Area is a two-digit capability-area number; type is one of `spec`, `dec`, `pol`, `fwk`, `str`, `res`.
+- **Status vocabulary.** `draft`, `in-progress`, `complete`, `superseded`, `needs-review`. Superseded documents stay searchable but return with a banner pointing to their replacement.
+- **Relationship fields.** `depends-on` (this document assumes the target is current), `feeds-into` (this document's output is input to the target), `also-touches` (areas affected without a hard dependency), `supersedes` (this document replaces a prior one).
+- **Chunking contract.** Sections under 4000 characters, one concept per section. Oversized sections are flagged by the audit and split.
+- **Excluded-fields list.** A project-defined roster of strings that must never appear in any chunk's `content` (PII, internal tokens, anything the project marks excluded). Scrubbing is enforced at index time and verified by a fixture-based test on every PR, plus a post-reindex database assertion that fails the workflow if anything leaks.
+
+The standards are machine-enforced on every PR, not aspirational. A PR that breaks them cannot merge.
+
+The corpus also supports **document renames**. When a document is renamed, the old slug is recorded in a rename map; the indexer treats both names as the same document while references inside other docs are migrated. The audit script's `--fix` mode performs the migration in bulk.
+
+---
+
 ## The seven tools
 
 | Tool | What it answers |
@@ -144,13 +181,47 @@ sequenceDiagram
 
 ---
 
+## Who uses it and how
+
+Not a developer tool. Every role on a delivery team asks the corpus different questions through the same tools.
+
+| Role | Asks | Tools |
+|---|---|---|
+| **Product Manager** | "What's our settled position on X? What depends on it?" | `search_docs`, `get_decision`, `get_impact_targets` |
+| **Engineering Manager** | "What's currently in progress in area N?" | `search_docs(area=N, status="in-progress")`, `get_doc_neighborhood` |
+| **Engineer** | "What's the blast radius if I change this?" | `get_impact_targets`, `get_decision`, `get_doc_outline` |
+| **Designer** | "What's our settled voice and tone? Which specs depend on this wireframe?" | `get_decision`, `get_doc_neighborhood` |
+| **QA** | "What test patterns exist for X?" | `search_docs`, `get_doc_outline` |
+| **Security / Compliance** | "Which fields can never be logged? Which policies apply here?" | `get_decision`, `search_docs(doc_type="pol")`, `get_drift_report` |
+| **DevOps / SRE** | "What's the runbook for alert X? Did the latest push reindex?" | `get_decision`, `check_index_health` |
+| **Founder** | "What's our settled commitment on X for this investor conversation?" | `get_decision`, `get_doc_neighborhood` |
+| **Technical Writer** | "What's safe to claim externally?" | `search_docs(status="complete")`, `get_decision` |
+| **New teammate** | "How does any of this work?" | the docs site + an assistant calling `search_docs`, `get_doc_outline` |
+
+Across the delivery lifecycle:
+
+| Stage | Typical use |
+|---|---|
+| Discovery | `search_docs` across research, `get_decision` for any settled topic |
+| Design | `get_doc_neighborhood` before changing; `get_doc_outline` to navigate long specs |
+| Implementation | `get_decision`, `search_docs` for the section to act on, `get_impact_targets` before touching settled work |
+| Code review | `get_doc_neighborhood` on every doc touched by the PR |
+| Testing | `get_doc_outline` of test plans; `search_docs` for existing patterns |
+| Release | `get_drift_report` before shipping; `check_index_health` after |
+| Operations | `get_decision` for runbooks; `search_docs` for policies |
+| Iteration | `get_impact_targets` before deprecating; `get_drift_report` weekly |
+
+Other recurring uses include investor diligence, regulatory submissions, partnership conversations, post-mortems, knowledge transfer when a teammate leaves, candidate take-home assignments, cross-track handoffs, and technology migrations. The corpus is the shared work surface; the tools are the access pattern.
+
+---
+
 ## How it is maintained
 
 A knowledge layer that is not maintained becomes a graveyard of stale claims. Five mechanisms keep the corpus honest:
 
 1. **Per-PR governance.** `audit-docs.yml` validates frontmatter, resolves references, checks section sizes, runs the scrub fixture test. A PR that breaks the standards cannot merge (with branch protection configured).
 2. **Incremental re-index on every push.** `sync-to-rag.yml` reindexes only the changed files. New documents are queryable within seconds of merge.
-3. **Manual full re-index.** `reindex.yml` (workflow-dispatch) wipes the index and rebuilds it. Used when chunking logic, the embedding model, or the scrub list changes. Two verifier steps (scrub + field coverage) and a decision-registry rebuild run after.
+3. **Manual full re-index.** `reindex.yml` (workflow-dispatch) wipes the index and rebuilds it. Used when chunking logic, the embedding model, or the scrub list changes. The workflow runs four steps in sequence: `populate.py --full-reindex` (clears the tables and reinserts every chunk), `verify_scrub.py` (queries the database for any chunk content matching an excluded field; fails if anything leaks), `verify_schema_fields.py` (checks preamble, tsvector, and provenance coverage across all chunks), and `build_decision_registry.py` (re-parses the decision-registry document and refreshes the `decisions` table).
 4. **The drift report and the weekly hygiene loop.** Once a week, an owner runs `get_drift_report(top=10)` and triages the top items. Each item arrives with the file, line, signal, reason, authoritative source, and suggested replacement. See [`docs/00-fwk-doc-hygiene-loop.md`](docs/00-fwk-doc-hygiene-loop.md).
 5. **The decisions registry.** `scripts/build_decision_registry.py` parses `decisions:` blocks from `*-dec-*.md` frontmatter into the `decisions` table. `get_decision` reads from it; the drift detector compares prose against it.
 
@@ -186,6 +257,27 @@ It is not "fully agentic" in any breathless sense of the word. Most maintenance 
 The template has been operated by a one- or two-person team; multi-team forks are untested.
 
 It is a pattern, an opinion, and a working reference implementation that any team can fork.
+
+---
+
+## What it costs
+
+These numbers are for a small team — startups, side projects, individual workspaces. Enterprise scale has different infrastructure requirements and pricing; this section does not attempt to predict them.
+
+For a 3-person team with up to a few hundred documents:
+
+| Component | Cost |
+|---|---|
+| GitHub Team plan (corpus + CI + audit + history) | $4 per user / month |
+| MCP server hosting (small platform-as-a-service tier) | ~$5 / month |
+| Postgres + pgvector (free tier of a managed Postgres host) | $0 |
+| Embedding API calls (incremental re-index of a few thousand chunks) | pennies per push |
+| Static docs site + graph view (free static-host tier) | $0 |
+| Auth gating on the static frontends (free identity-edge tier, ≤50 users) | $0 |
+
+Total: approximately $17 per month for a 3-person team. The largest fixed cost is the GitHub Team subscription.
+
+Costs grow with corpus size and re-index frequency. A 50,000-document corpus with daily pushes will exceed the Postgres free tier, increase the embedding bill, and likely need a larger MCP server instance. Those numbers are not estimated here.
 
 ---
 
