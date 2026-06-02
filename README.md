@@ -29,7 +29,7 @@ flowchart LR
 
 ---
 
-## Code-first was built for humans who tolerate ambiguity
+## Agents break on the ambiguity humans tolerated
 
 For a decade the default in software delivery was code-first: talk through the change, write the code, document selectively, move on. The docs that existed were for onboarding, compliance, or sales; they lagged the code and contradicted it, so nobody trusted them and nobody updated them. That was survivable because the readers were humans, and humans tolerate ambiguity. A new engineer read what existed and then asked whoever had been there longest. The real transfer happened in conversation, and the documents were scaffolding.
 
