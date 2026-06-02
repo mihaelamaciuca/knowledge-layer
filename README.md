@@ -4,7 +4,7 @@
 [![Audit doc standards](https://github.com/mihaelamaciuca/knowledge-layer/actions/workflows/audit-docs.yml/badge.svg)](https://github.com/mihaelamaciuca/knowledge-layer/actions/workflows/audit-docs.yml)
 [![Python 3.12+](https://img.shields.io/badge/python-3.12+-blue.svg)](https://www.python.org/downloads/)
 
-**[Architecture](ARCHITECTURE.md)** · **[Quickstart](QUICKSTART.md)** · **[Contributing](CONTRIBUTING.md)** · **[Method](methodology.md)** · **[Writing guide](docs/00-fwk-writing-guide.md)**
+**[Architecture](ARCHITECTURE.md)** · **[Quickstart](QUICKSTART.md)** · **[Adoption](ADOPTION.md)** · **[Contributing](CONTRIBUTING.md)** · **[Method](methodology.md)** · **[Writing guide](docs/00-fwk-writing-guide.md)**
 
 > Your team's memory, made queryable by both humans and agents. A write-first method, a reference implementation, and a forkable starting point.
 
@@ -69,7 +69,7 @@ Everything the system needs lives in one git repository:
 
 3. **The MCP server.** A `src/` FastAPI application that exposes seven tools over the MCP Streamable HTTP transport. Any MCP-aware client (Claude Code, Claude.ai, or other agents) connects and calls the tools. Humans access the same corpus directly through the doc files on disk and through any docs site built on top of them.
 
-4. **Worked examples.** At least one end-to-end example per doc type under `docs/`: `01-str-knowledge-strategy.md` (strategy), `02-spec-onboarding-flow.md` and `03-spec-search-api.md` (spec), `03-dec-tech-stack.md` (decision), `03-res-vector-stores.md` (research), `05-pol-data-retention.md` (policy), and the framework docs at `docs/00-fwk-*.md`. Plus `examples/CLAUDE.example.md` (a populated `CLAUDE.md` skeleton) and `examples/sample-docs/` (a before/after pair showing the writing rules applied).
+4. **Worked examples.** At least one end-to-end example per doc type under `docs/`: `01-str-knowledge-strategy.md` (strategy), `02-spec-onboarding-flow.md` and `03-spec-search-api.md` (spec), `03-dec-tech-stack.md` (decision), `03-res-vector-stores.md` (research), `05-pol-data-retention.md` (policy), and the framework docs at `docs/00-fwk-*.md`. Plus two `CLAUDE.md` samples (`examples/CLAUDE.example.md` for the app a team builds, `examples/CLAUDE.corpus.example.md` for authoring the corpus) and `examples/sample-docs/` (a before/after pair showing the writing rules applied).
 
 The corpus, the indexer, and the server live in the same repository on purpose. Documents, the code that indexes them, and the code that serves them evolve together. One tree, one history, one PR.
 
@@ -319,6 +319,8 @@ Costs grow with corpus size and re-index frequency. A 50,000-document corpus wit
 ## Setup and your first document
 
 See [QUICKSTART.md](QUICKSTART.md) for the full setup walkthrough (Supabase + pgvector, OpenAI, Railway, the schema migration, CI secrets, and your first document).
+
+To roll the practice out with an existing team, the way of working rather than the infrastructure, see [ADOPTION.md](ADOPTION.md).
 
 ---
 
